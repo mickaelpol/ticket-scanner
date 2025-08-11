@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="fr">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Scanner Ticket → Google Sheets</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <style>
+    :root {
+      --safe-bottom: env(safe-area-inset-bottom);
+    }
+
+    body {
+      background: #0b1020;
+      color: #e5e7eb;
+    }
+
+    .card {
+      background: #0f162e;
+      border: 1px solid #1f2937;
+    }
+
+    .text-muted {
+      color: #9ca3af !important;
+    }
+
+    .form-control,
+    .btn,
+    .form-select {
+      font-size: 18px;
+      padding: 14px 16px;
+      border-radius: .9rem;
+    }
+
+    .chip.btn {
+      font-size: 16px;
+      padding: 10px 14px;
+      border-radius: 999px;
+    }
+
+    .form-label {
+      font-size: 16px;
+    }
+
+    .preview-box {
+      border: 1px dashed #1f2937;
+      border-radius: 1rem;
+      aspect-ratio: 4/3;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background: #0b1226;
+    }
+
+    #preview {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .actions-mobile {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 1030;
+      background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, #0b1020 20%);
+      padding: .75rem 1rem calc(1rem + var(--safe-bottom));
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: .75rem;
+    }
+
+    @media (min-width: 992px) {
+      .actions-mobile {
+        position: static;
+        background: transparent;
+        padding: 0;
+      }
+    }
+
+    input[type="file"] {
+      position: absolute;
+      left: -9999px;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+
+    .statusbar {
+      position: sticky;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #0f162e;
+      border: 1px solid #1f2937;
+      padding: .5rem .75rem;
+      border-radius: .75rem;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container-fluid px-2 px-md-3 py-3 pb-5 pb-lg-4">
+    <header class="mb-3 d-flex align-items-center justify-content-between gap-2">
+      <h1 class="h5 mb-0">Scanner un ticket → Google Sheets</h1>
+      <div class="d-flex align-items-center gap-2">
+        <label for="sheetSelect" class="form-label m-0 me-1">Onglet :</label>
+        <select id="sheetSelect" class="form-select" style="min-width:180px;"></select>
+      </div>
+    </header>
+
+    <div class="card shadow-sm p-3 p-lg-4">
+      <div class="row g-4">
+        <!-- IMAGE -->
+        <div class="col-12 col-lg-6">
+          <div class="mb-2">
+            <label for="file" class="form-label fw-semibold">Photo du ticket</label>
+            <div class="d-grid gap-2">
+              <label for="file" class="btn btn-primary">📷 Prendre une photo</label>
+            </div>
+            <input id="file" type="file" accept="image/*" capture="environment" />
+            <div class="form-text text-muted">Astuce : ticket bien à plat, lumière homogène, cadre serré.</div>
+          </div>
+          <div class="preview-box">
+            <img id="preview" alt="Prévisualisation" />
+          </div>
+        </div>
+
+        <!-- FORM -->
+        <div class="col-12 col-lg-6">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Qui scanne ?</label>
+            <div class="btn-group w-100" role="group" aria-label="Qui scanne">
+              <input type="radio" class="btn-check" name="who" id="who-sab" autocomplete="off" value="Sabrina">
+              <label class="btn btn-outline-light" for="who-sab">Sabrina</label>
+
+              <input type="radio" class="btn-check" name="who" id="who-mick" autocomplete="off" value="Mickael" checked>
+              <label class="btn btn-outline-light" for="who-mick">Mickael</label>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Intitulé (enseigne)</label>
+            <input id="merchant" type="text" class="form-control" placeholder="Ex : ASF, CARREFOUR CITY" />
+            <div id="merchantCandidates" class="mt-2"></div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Date</label>
+            <input id="date" type="text" inputmode="numeric" class="form-control" placeholder="jj/mm/aaaa" />
+            <div id="dateCandidates" class="mt-2"></div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Total (€)</label>
+            <input id="total" type="text" inputmode="decimal" class="form-control" placeholder="Ex : 162,05" />
+            <div id="totalCandidates" class="mt-2"></div>
+            <div class="form-text text-muted">Sera enregistré en **monnaie** (format €) dans la feuille.</div>
+          </div>
+
+          <div class="d-none d-lg-grid gap-2">
+            <button class="btn btn-success" id="btnSave" disabled>Enregistrer dans le Google Sheet</button>
+            <button class="btn btn-danger" id="btnReset">Réinitialiser</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3 statusbar" id="status">Prêt.</div>
+    </div>
+  </div>
+
+  <div class="actions-mobile d-lg-none">
+    <button class="btn btn-success" id="btnSave" disabled>Enregistrer</button>
+    <button class="btn btn-danger" id="btnReset">Réinitialiser</button>
+  </div>
+
+  <script>
+    const $ = s => document.querySelector(s);
+    let base64Image = null;
+
+    // --- Sélecteur d’onglet ---
+    google.script.run.withSuccessHandler(res => {
+      if (!res?.ok) return;
+      const sel = $('#sheetSelect');
+      sel.innerHTML = res.names.map(n => `<option ${n === res.defaultName ? 'selected' : ''}>${n}</option>`).join('');
+    }).getSheets();
+
+    const chipBtn = v => `<button type="button" class="btn btn-outline-secondary chip me-2 mb-2" data-v="${v}">${v}</button>`;
+    const chipsHTML = arr => (arr && arr.length) ? arr.map(chipBtn).join('') : '<span class="text-muted small">—</span>';
+    function enableSave(on) { document.querySelectorAll('#btnSave').forEach(b => b.disabled = !on); }
+    function setStatus(msg) { $('#status').textContent = msg; }
+
+    function bindChips(containerId, inputId) {
+      document.getElementById(containerId).onclick = e => {
+        const btn = e.target.closest('.chip'); if (!btn) return;
+        document.getElementById(inputId).value = btn.getAttribute('data-v');
+      };
+    }
+    bindChips('merchantCandidates', 'merchant');
+    bindChips('dateCandidates', 'date');
+    bindChips('totalCandidates', 'total');
+
+    // OCR auto (prétraitement “scanner” toujours actif)
+    $('#file').addEventListener('change', async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      setStatus('Préparation de l’image…');
+      const rawB64 = await fileToBase64(f);
+      base64Image = await enhanceForOCR(rawB64); // toujours
+      $('#preview').src = 'data:image/jpeg;base64,' + base64Image;
+
+      setStatus('Analyse (OCR)…');
+      google.script.run
+        .withSuccessHandler(res => {
+          if (!res || res.ok === false) {
+            const who = res?.context?.user ? ` | user=${res.context.user}` : '';
+            setStatus(`Erreur analyse : ${res?.error || 'inconnue'}${who}`);
+            enableSave(false);
+            return;
+          }
+          $('#merchant').value = res.enseigne || '';
+          $('#date').value = res.date || '';
+          $('#total').value = (res.total || '').replace(/[€\s]/g, '').replace('.', ','); // on affiche avec virgule
+
+          $('#merchantCandidates').innerHTML = chipsHTML(res.candidates?.merchants || []);
+          $('#dateCandidates').innerHTML = chipsHTML(res.candidates?.dates || []);
+          $('#totalCandidates').innerHTML = chipsHTML(res.candidates?.totals || []).replaceAll('.', ',');
+
+          enableSave(true);
+          setStatus('Vérifie/ajuste puis “Enregistrer”.');
+        })
+        .withFailureHandler(err => {
+          setStatus('Erreur Apps Script (analyze): ' + (err?.message || err));
+          enableSave(false);
+        })
+        .analyzeReceipt(base64Image, suggestFilename());
+    });
+
+    // Enregistrer
+    document.querySelectorAll('#btnSave').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const who = (document.querySelector('input[name="who"]:checked')?.value || '').trim();
+        const payload = {
+          who,
+          sheetName: $('#sheetSelect').value,
+          enseigne: $('#merchant').value,
+          date: $('#date').value,
+          total: $('#total').value
+        };
+        setStatus('Enregistrement…');
+        google.script.run
+          .withSuccessHandler(res => {
+            if (!res || res.ok === false) {
+              const whoU = res?.context?.user ? ` | user=${res.context.user}` : '';
+              setStatus(`Erreur d’enregistrement : ${res?.error || 'inconnue'}${whoU}`);
+              return;
+            }
+            setStatus(`Enregistré ✔ (ligne ${res.row}, ${res.who}, onglet « ${$('#sheetSelect').value} »)`);
+            enableSave(false);
+          })
+          .withFailureHandler(err => {
+            setStatus('Erreur Apps Script (save): ' + (err?.message || err));
+          })
+          .saveToSheet(payload);
+      });
+    });
+
+    // Reset
+    document.querySelectorAll('#btnReset').forEach(btn => {
+      btn.addEventListener('click', () => {
+        base64Image = null; $('#file').value = ''; $('#preview').src = '';
+        ['merchant', 'date', 'total'].forEach(id => $('#' + id).value = '');
+        ['merchantCandidates', 'dateCandidates', 'totalCandidates'].forEach(id => $('#' + id).innerHTML = '');
+        enableSave(false); setStatus('Prêt.');
+      });
+    });
+
+    // Utils
+    function suggestFilename() {
+      const n = new Date(), p = x => String(x).padStart(2, '0');
+      return `ticket_${n.getFullYear()}-${p(n.getMonth() + 1)}-${p(n.getDate())}_${p(n.getHours())}-${p(n.getMinutes())}.jpg`;
+    }
+    function fileToBase64(file) {
+      return new Promise((res, rej) => {
+        const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.onerror = rej; r.readAsDataURL(file);
+      });
+    }
+
+    // Préparation “scanner” : N&B + contraste + sharpen + seuillage Otsu
+    async function enhanceForOCR(base64) {
+      const b64 = await downscaleToJpegBase64(base64, 2000, 0.95);
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => {
+          const c = document.createElement('canvas'), ctx = c.getContext('2d');
+          c.width = img.width; c.height = img.height;
+          ctx.drawImage(img, 0, 0);
+          // 1) Gris
+          let imgData = ctx.getImageData(0, 0, c.width, c.height);
+          for (let i = 0; i < imgData.data.length; i += 4) {
+            const r = imgData.data[i], g = imgData.data[i + 1], b = imgData.data[i + 2];
+            const y = 0.299 * r + 0.587 * g + 0.114 * b;
+            imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = y;
+          }
+          ctx.putImageData(imgData, 0, 0);
+          // 2) Contraste simple
+          imgData = ctx.getImageData(0, 0, c.width, c.height);
+          const contrast = 1.35, brightness = 8;
+          for (let i = 0; i < imgData.data.length; i += 4) {
+            let v = imgData.data[i] * contrast + brightness;
+            v = Math.max(0, Math.min(255, v));
+            imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = v;
+          }
+          ctx.putImageData(imgData, 0, 0);
+          // 3) Sharpen léger
+          convolve(ctx, c, [0, -1, 0, -1, 5, -1, 0, -1, 0], 1);
+          // 4) Otsu threshold
+          imgData = ctx.getImageData(0, 0, c.width, c.height);
+          const thr = otsuThreshold(imgData);
+          for (let i = 0; i < imgData.data.length; i += 4) {
+            const v = imgData.data[i] < thr ? 0 : 255;
+            imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = v;
+          }
+          ctx.putImageData(imgData, 0, 0);
+          const out = c.toDataURL('image/jpeg', 0.9).split(',')[1];
+          resolve(out);
+        };
+        img.src = 'data:image/jpeg;base64,' + b64;
+      });
+    }
+
+    function otsuThreshold(imgData) {
+      const hist = new Array(256).fill(0);
+      const data = imgData.data;
+      for (let i = 0; i < data.length; i += 4) { hist[data[i] | 0]++; }
+      const total = imgData.width * imgData.height;
+      let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+      let sumB = 0, wB = 0, maxVar = 0, threshold = 127;
+      for (let t = 0; t < 256; t++) {
+        wB += hist[t];
+        if (wB === 0) continue;
+        const wF = total - wB; if (wF === 0) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB;
+        const mF = (sum - sumB) / wF;
+        const between = wB * wF * (mB - mF) * (mB - mF);
+        if (between > maxVar) { maxVar = between; threshold = t; }
+      }
+      return threshold;
+    }
+
+    function convolve(ctx, canvas, kernel, divisor = 1) {
+      const w = canvas.width, h = canvas.height;
+      const src = ctx.getImageData(0, 0, w, h);
+      const dst = ctx.createImageData(w, h);
+      const k = kernel, half = 1;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          let sum = 0;
+          for (let ky = -half; ky <= half; ky++) {
+            for (let kx = -half; kx <= half; kx++) {
+              const px = Math.min(w - 1, Math.max(0, x + kx));
+              const py = Math.min(h - 1, Math.max(0, y + ky));
+              const idx = (py * w + px) * 4;
+              const kval = k[(ky + half) * 3 + (kx + half)];
+              sum += src.data[idx] * kval;
+            }
+          }
+          const i = (y * w + x) * 4;
+          const v = Math.max(0, Math.min(255, sum / divisor));
+          dst.data[i] = dst.data[i + 1] = dst.data[i + 2] = v;
+          dst.data[i + 3] = 255;
+        }
+      }
+      ctx.putImageData(dst, 0, 0);
+    }
+
+    function downscaleToJpegBase64(base64, maxSide = 2000, quality = 0.95) {
+      return new Promise(resolve => {
+        const img = new Image();
+        img.onload = () => {
+          let w = img.width, h = img.height;
+          const ratio = Math.min(1, maxSide / Math.max(w, h));
+          const cw = Math.round(w * ratio), ch = Math.round(h * ratio);
+          const canvas = document.createElement('canvas'); canvas.width = cw; canvas.height = ch;
+          const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0, cw, ch);
+          const out = canvas.toDataURL('image/jpeg', quality).split(',')[1];
+          resolve(out);
+        };
+        img.src = 'data:image/jpeg;base64,' + base64;
+      });
+    }
+  </script>
+</body>
+
+</html>
