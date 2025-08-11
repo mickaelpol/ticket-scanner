@@ -36,14 +36,16 @@
         <div class="col-12">
           <h1 class="h5 mb-0 text-center"><u>Ticket scanner</u></h1>
         </div>
-        <div class="col-12 my-4 d-flex flex-column flex-lg-row align-items-center justify-content-center gap-2">
-          <button id="btnAuth" class="btn btn-outline-light">Se connecter à Google</button>
-          <span id="authStatus" class="text-muted">Non connecté</span>
+
+        <div class="col-12 my-3 d-flex flex-column flex-lg-row align-items-center justify-content-center gap-2">
+          <button id="btnAuth" class="btn btn-outline-light" style="display:none">Se connecter à Google</button>
+          <span id="authStatus" class="text-muted">Connexion…</span>
         </div>
+
         <div class="col-12 my-2 text-center">
           <div class="d-flex flex-column flex-lg-row align-items-center justify-content-center gap-2">
             <label for="sheetSelect" class="form-label mb-0 fw-bold" style="white-space:nowrap;font-size:18px;">Feuille de calcul :</label>
-            <select id="sheetSelect" class="form-select" style="width:200px;"></select>
+            <select id="sheetSelect" class="form-select" style="width:220px;"></select>
           </div>
         </div>
       </div>
@@ -73,6 +75,7 @@
             <div class="btn-group w-100" role="group" aria-label="Qui scanne">
               <input type="radio" class="btn-check" name="who" id="who-sab" autocomplete="off" value="Sabrina">
               <label class="btn btn-outline-light" for="who-sab">Sabrina</label>
+
               <input type="radio" class="btn-check" name="who" id="who-mick" autocomplete="off" value="Mickael" checked>
               <label class="btn btn-outline-light" for="who-mick">Mickael</label>
             </div>
@@ -94,7 +97,7 @@
             <label class="form-label fw-semibold">Total (€)</label>
             <input id="total" type="text" inputmode="decimal" class="form-control" placeholder="Ex : 162,05" />
             <div id="totalCandidates" class="mt-2"></div>
-            <div class="form-text text-muted">Sera enregistré en **monnaie** (format €) dans la feuille.</div>
+            <div class="form-text text-muted">Enregistré en <b>monnaie €</b> (nombre formaté).</div>
           </div>
 
           <div class="d-none d-lg-grid gap-2">
@@ -116,21 +119,26 @@
   </div>
 
 <script>
-/* ===== CONFIG ===== */
-const SCRIPT_ID = '1E9a2xo_fmEuHJCdlgvTN-ptO_waWv-_Kbr2nMILwvZFbsJ8lrdl8aRNY';
-const CLIENT_ID = '479308590121-v1abg3oqtia9lkmek7bvvd6qdrlqg5o6.apps.googleusercontent.com';
+/* ========= CONFIG À REMPLACER ========= */
+const SCRIPT_ID = 'REMPLACE_PAR_TON_SCRIPT_ID';   // ex: AKfycbx... (ID du projet Apps Script)
+const CLIENT_ID = 'REMPLACE_PAR_TON_CLIENT_ID';   // ex: 1234-xxxxx.apps.googleusercontent.com
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/documents',
   'https://www.googleapis.com/auth/userinfo.email'
 ];
+/* ===================================== */
 
 let tokenClient;
+let accessToken = null;
+let tokenExpiry = 0;
+let refreshTimer = null;
+
 let base64Image = null;
 const $ = s => document.querySelector(s);
 
-/* ===== Auth / Execution API ===== */
+/* ===== gapi (Apps Script discovery) ===== */
 function gapiLoaded(){
   gapi.load('client', async () => {
     await gapi.client.init({
@@ -138,49 +146,61 @@ function gapiLoaded(){
     });
   });
 }
-window.addEventListener('load', () => {
+
+/* ===== Auth silencieuse (GIS) ===== */
+function initGIS(loginHint = null){
   tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: CLIENT_ID,
     scope: SCOPES.join(' '),
+    hint: loginHint || undefined,
     callback: (t) => {
-      gapi.client.setToken({ access_token: t.access_token });
+      if (!t || !t.access_token) { showAuthButton(true); setStatus('Connexion requise.'); return; }
+      accessToken = t.access_token;
+      tokenExpiry = Date.now() + (Math.max(300, (t.expires_in || 3600)) * 1000);
+      gapi.client.setToken({ access_token: accessToken });
       $('#authStatus').textContent = 'Connecté ✔';
       setStatus('Connecté ✔');
-      // Charger la liste d’onglets
+      showAuthButton(false);
+
+      // refresh automatique 5 min avant expiration
+      if (refreshTimer) clearTimeout(refreshTimer);
+      const delay = Math.max(60_000, (t.expires_in - 300) * 1000);
+      refreshTimer = setTimeout(silentRefresh, delay);
+
+      // mémoriser l'email (hint) et charger les onglets
+      whoAmI().then(email => { if (email) localStorage.setItem('ticketScanner_email', email); });
       refreshSheetList();
     }
   });
-  $('#btnAuth').onclick = () => requestToken(true);
-
-  // Boutons
-  $('#btnAnalyze').onclick = analyze;
-  $('#btnAnalyze_m').onclick = analyze;
-  $('#btnSave').onclick = save;
-  $('#btnSave_m').onclick = save;
-  $('#btnReset').onclick = resetForm;
-  $('#btnReset_m').onclick = resetForm;
-
-  // Upload image → auto analyse possible
-  $('#file').addEventListener('change', async (e)=>{
-    const f = e.target.files?.[0];
-    if(!f) return;
-    setStatus('Préparation de l’image…');
-    const rawB64 = await fileToBase64(f);
-    base64Image = await enhanceForOCR(rawB64);
-    $('#preview').src = 'data:image/jpeg;base64,' + base64Image;
-  });
-});
-
-function requestToken(forcePrompt=false){
-  return new Promise(resolve=>{
-    tokenClient.callback = () => resolve();
-    const token = gapi.client.getToken();
-    tokenClient.requestAccessToken({ prompt: (!token || forcePrompt) ? 'consent' : '' });
-  });
+}
+function silentSignin(){
+  initGIS(localStorage.getItem('ticketScanner_email'));
+  tokenClient.requestAccessToken({ prompt: '' });
+}
+function interactiveSignin(){
+  initGIS(localStorage.getItem('ticketScanner_email'));
+  tokenClient.requestAccessToken({ prompt: 'consent' });
+}
+function silentRefresh(){
+  if (!tokenClient) initGIS(localStorage.getItem('ticketScanner_email'));
+  tokenClient.requestAccessToken({ prompt: '' });
+}
+function showAuthButton(show){
+  const b = $('#btnAuth');
+  if (b) b.style.display = show ? '' : 'none';
 }
 
+/* ===== Execution API wrapper ===== */
 async function exec(fn, params){
-  await requestToken(false);
+  // token valable ?
+  if (!accessToken || Date.now() > (tokenExpiry - 60_000)) {
+    await new Promise(resolve=>{
+      if (!tokenClient) initGIS(localStorage.getItem('ticketScanner_email'));
+      const prev = tokenClient.callback;
+      tokenClient.callback = (...a)=>{ tokenClient.callback = prev || (()=>{}); resolve(); };
+      tokenClient.requestAccessToken({ prompt: '' });
+    });
+  }
   const resp = await gapi.client.script.scripts.run({
     scriptId: SCRIPT_ID,
     resource: { function: fn, parameters: params }
@@ -194,30 +214,26 @@ async function exec(fn, params){
   return result.response.result;
 }
 
-/* ===== UI helpers ===== */
+/* ===== Helpers UI ===== */
 function setStatus(msg){ $('#status').textContent = msg; }
 function enableSave(on){ ['#btnSave','#btnSave_m'].forEach(id=>{ const b=$(id); if(b) b.disabled=!on; }); }
 function chipBtn(v){ return `<button type="button" class="btn btn-outline-secondary chip me-2 mb-2" data-v="${v}">${v}</button>`; }
 function chipsHTML(arr){ return (arr && arr.length) ? arr.map(chipBtn).join('') : '<span class="text-muted small">—</span>'; }
 ['merchant','date','total'].forEach(id=>{
-  const contId = id+'Candidates';
-  const cont = document.getElementById(contId);
+  const cont = document.getElementById(id+'Candidates');
   if(cont) cont.addEventListener('click', e=>{
     const btn = e.target.closest('.chip'); if(!btn) return;
     document.getElementById(id).value = btn.getAttribute('data-v');
   });
 });
 
-/* ===== Charger la liste d’onglets ===== */
+/* ===== Liste des onglets ===== */
 async function refreshSheetList(){
   try{
     const res = await exec('getSheets', []);
     if(!res?.ok) return;
-    const sel = $('#sheetSelect');
-    sel.innerHTML = res.names.map(n=>`<option ${n===res.defaultName?'selected':''}>${n}</option>`).join('');
-  }catch(e){
-    setStatus('Erreur liste onglets : '+e.message);
-  }
+    $('#sheetSelect').innerHTML = res.names.map(n=>`<option ${n===res.defaultName?'selected':''}>${n}</option>`).join('');
+  }catch(e){ setStatus('Erreur liste onglets : '+e.message); }
 }
 
 /* ===== OCR ===== */
@@ -226,14 +242,9 @@ async function analyze(){
     if(!base64Image){
       const f = $('#file').files?.[0];
       if(!f) { setStatus('Choisis une photo de ticket.'); return; }
-      setStatus('Préparation de l’image…');
-      const rawB64 = await fileToBase64(f);
-      base64Image = await enhanceForOCR(rawB64);
-      $('#preview').src = 'data:image/jpeg;base64,' + base64Image;
     }
     setStatus('Analyse (OCR)…');
-    const filename = suggestFilename();
-    const res = await exec('analyzeReceipt', [base64Image, filename]);
+    const res = await exec('analyzeReceipt', [base64Image, suggestFilename()]);
     if(!res || res.ok === false){
       setStatus('Erreur analyse : ' + (res?.error || 'inconnue'));
       enableSave(false);
@@ -267,15 +278,10 @@ async function save(){
     };
     setStatus('Enregistrement…');
     const res = await exec('saveToSheet', [payload]);
-    if(!res || res.ok === false){
-      setStatus('Erreur enregistrement : ' + (res?.error || 'inconnue'));
-      return;
-    }
+    if(!res || res.ok === false){ setStatus('Erreur enregistrement : ' + (res?.error || 'inconnue')); return; }
     setStatus(`Enregistré ✔ (ligne ${res.row}, ${res.who}, onglet « ${payload.sheetName} »)`);
     enableSave(false);
-  }catch(e){
-    setStatus('Erreur API (save): ' + e.message);
-  }
+  }catch(e){ setStatus('Erreur API (save): ' + e.message); }
 }
 
 /* ===== Reset ===== */
@@ -297,7 +303,7 @@ function fileToBase64(file){
   });
 }
 
-/* ===== Prétraitement “scanner” (N&B + contraste + sharpen + Otsu) ===== */
+/* Prétraitement “scanner” + downscale */
 async function enhanceForOCR(base64){
   const b64 = await downscaleToJpegBase64(base64, 2000, 0.95);
   return new Promise(resolve=>{
@@ -313,7 +319,7 @@ async function enhanceForOCR(base64){
         d.data[i]=d.data[i+1]=d.data[i+2]=y;
       }
       ctx.putImageData(d,0,0);
-      // Contraste simple
+      // Contraste
       d=ctx.getImageData(0,0,c.width,c.height);
       const contrast=1.35, brightness=8;
       for(let i=0;i<d.data.length;i+=4){
@@ -389,6 +395,34 @@ function downscaleToJpegBase64(base64,maxSide=2000,quality=0.95){
     img.src='data:image/jpeg;base64,'+base64;
   });
 }
+
+/* ===== Initialisation page ===== */
+window.addEventListener('load', ()=>{
+  // Boutons
+  $('#btnAuth').onclick = () => interactiveSignin();
+  $('#btnAnalyze').onclick = analyze;
+  $('#btnAnalyze_m').onclick = analyze;
+  $('#btnSave').onclick = save;
+  $('#btnSave_m').onclick = save;
+  $('#btnReset').onclick = resetForm;
+  $('#btnReset_m').onclick = resetForm;
+
+  // Image → auto prétraitement + preview + OCR auto
+  $('#file').addEventListener('change', async (e)=>{
+    const f = e.target.files?.[0]; if(!f) return;
+    setStatus('Préparation de l’image…');
+    const rawB64 = await fileToBase64(f);
+    base64Image = await enhanceForOCR(rawB64);
+    $('#preview').src = 'data:image/jpeg;base64,' + base64Image;
+    // OCR auto
+    await analyze();
+  });
+
+  // Essai de connexion silencieuse
+  showAuthButton(false);
+  $('#authStatus').textContent = 'Connexion…';
+  silentSignin();
+});
 </script>
 </body>
 </html>
