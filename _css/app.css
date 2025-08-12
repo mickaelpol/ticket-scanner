@@ -1,0 +1,90 @@
+:root {
+    --safe-bottom: env(safe-area-inset-bottom);
+}
+
+body {
+    background: #0b1020;
+    color: #e5e7eb;
+}
+
+.card {
+    background: #0f162e;
+    border: 1px solid #1f2937;
+}
+
+.text-muted {
+    color: #9ca3af !important;
+}
+
+.form-control, .btn, .form-select {
+    font-size: 18px;
+    padding: 14px 16px;
+    border-radius: .9rem;
+}
+
+.chip.btn {
+    font-size: 16px;
+    padding: 10px 14px;
+    border-radius: 999px;
+}
+
+.form-label {
+    font-size: 16px;
+    color: #fff;
+}
+
+.preview-box {
+    border: 1px dashed #1f2937;
+    border-radius: 1rem;
+    aspect-ratio: 4/3;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background: #0b1226;
+}
+
+#preview {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.actions-mobile {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1030;
+    background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, #0b1020 20%);
+    padding: .75rem 1rem calc(1rem + var(--safe-bottom));
+    display: grid;
+    grid-template-columns:1fr;
+    gap: .75rem;
+}
+
+@media (min-width: 992px) {
+    .actions-mobile {
+        position: static;
+        background: transparent;
+        padding: 0;
+    }
+}
+
+input[type="file"] {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.statusbar {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #0f162e;
+    border: 1px solid #1f2937;
+    padding: .5rem .75rem;
+    border-radius: .75rem;
+}
