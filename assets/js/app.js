@@ -27,41 +27,31 @@ function gapiLoaded() {
 }
 
 /* ===== Auth silencieuse (GIS) ===== */
-function initGIS(loginHint = null) {
+function initGIS(loginHint = null){
     tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
         scope: SCOPES.join(' '),
         hint: loginHint || undefined,
         callback: (t) => {
-            if (!t || !t.access_token) {
-                showAuthButton(true);
-                setStatus('Connexion requise.');
-                return;
-            }
+            if (!t || !t.access_token) { showAuthButton(true); setStatus('Connexion requise.'); return; }
             accessToken = t.access_token;
             tokenExpiry = Date.now() + (Math.max(300, (t.expires_in || 3600)) * 1000);
-            gapi.client.setToken({access_token: accessToken});
+            gapi.client.setToken({ access_token: accessToken });
             $('#authStatus').textContent = 'Connecté ✔';
-            setStatus('Connecté ✔');
             showAuthButton(false);
-
-            // refresh automatique 5 min avant expiration
+            // refresh auto 5 min avant
             if (refreshTimer) clearTimeout(refreshTimer);
-            const delay = Math.max(60_000, (t.expires_in - 300) * 1000);
-            refreshTimer = setTimeout(silentRefresh, delay);
-
-            // mémoriser l'email (hint) et charger les onglets
-            whoAmI().then(email => {
-                if (email) localStorage.setItem('ticketScanner_email', email);
-            });
+            refreshTimer = setTimeout(silentRefresh, Math.max(60_000, (t.expires_in - 300) * 1000));
+            // mémorise l’e-mail pour le login_hint des prochaines sessions
+            whoAmI().then(email => { if (email) localStorage.setItem('ticketScanner_email', email); });
             refreshSheetList();
         }
     });
 }
 
-function silentSignin() {
+function silentSignin(){
     initGIS(localStorage.getItem('ticketScanner_email'));
-    tokenClient.requestAccessToken({prompt: ''});
+    tokenClient.requestAccessToken({ prompt: '' }); // pas de popup si déjà consenti
 }
 
 function interactiveSignin() {
@@ -80,27 +70,23 @@ function showAuthButton(show) {
 }
 
 /* ===== Execution API wrapper ===== */
-async function exec(fn, params) {
-    // token valable ?
+async function exec(fn, params){
     if (!accessToken || Date.now() > (tokenExpiry - 60_000)) {
-        await new Promise(resolve => {
+        await new Promise(resolve=>{
             if (!tokenClient) initGIS(localStorage.getItem('ticketScanner_email'));
             const prev = tokenClient.callback;
-            tokenClient.callback = (...a) => {
-                tokenClient.callback = prev || (() => {
-                });
-                resolve();
-            };
-            tokenClient.requestAccessToken({prompt: ''});
+            tokenClient.callback = (...a)=>{ tokenClient.callback = prev || (()=>{}); resolve(); };
+            tokenClient.requestAccessToken({ prompt: '' });
         });
     }
     const resp = await gapi.client.script.scripts.run({
         scriptId: SCRIPT_ID,
-        resource: {function: fn, parameters: params}
+        resource: { function: fn, parameters: params }
     });
     const result = resp.result;
     if (result.error) {
         const det = result.error.details && result.error.details[0];
+        console.error('ExecutionAPI error:', result.error, det);
         const msg = det && det.errorMessage ? det.errorMessage : JSON.stringify(result.error);
         throw new Error(msg);
     }
