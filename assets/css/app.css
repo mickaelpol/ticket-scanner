@@ -83,6 +83,7 @@ input[type="file"] {
     bottom: 0;
     left: 0;
     right: 0;
+    color: #ffffff;
     background: #0f162e;
     border: 1px solid #1f2937;
     padding: .5rem .75rem;
