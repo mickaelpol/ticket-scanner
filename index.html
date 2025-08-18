@@ -1,96 +1,109 @@
 <!doctype html>
 <html lang="fr">
 <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-    <title>Scanner Ticket → Google Sheets</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <title>Scanner Ticket → Google Sheets</title>
 
-    <!-- Bootstrap 5 -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
-    <link rel="stylesheet" href="assets/css/app.css">
+  <!-- Styles de l'app -->
+  <link rel="stylesheet" href="assets/css/app.css"/>
 
-    <!-- Google Identity + API -->
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
-    <script src="https://apis.google.com/js/api.js" async defer></script>
+  <!-- OCR + Prétraitement image -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="window._opencvReady=true"></script>
+
+  <!-- Google Identity Services + gapi -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://apis.google.com/js/api.js" async defer></script>
 </head>
 <body>
-<div class="container-fluid px-2 px-md-3 py-3 pb-5 pb-lg-4">
+  <div class="container-fluid px-2 px-md-3 py-3 pb-4">
     <header class="mb-3">
-        <div class="row">
-            <div class="col-12 text-center">
-                <h1 class="h5 mb-0"><u>Ticket scanner</u></h1>
-            </div>
-            <div class="col-12 my-3 text-center">
-                <button id="btnAuth" class="btn btn-outline-light">Se connecter à Google</button>
-                <span id="authStatus" class="text-muted">Connexion…</span>
-            </div>
-            <div class="col-12 my-2 text-center">
-                <div class="d-flex flex-column flex-lg-row align-items-center justify-content-center gap-2">
-                    <label for="sheetSelect" class="form-label mb-0 fw-bold">Feuille :</label>
-                    <select id="sheetSelect" class="form-select" style="width:220px;"></select>
-                </div>
-            </div>
+      <div class="row align-items-center g-2">
+        <div class="col-12 text-center">
+          <h1 class="h5 mb-1"><u>Ticket scanner</u></h1>
+          <div id="authRow" class="d-inline-flex align-items-center gap-2">
+            <button id="btnAuth" class="btn btn-outline-light btn-sm" style="display:none">Se connecter à Google</button>
+            <span id="authStatus" class="text-muted small">Connexion…</span>
+          </div>
         </div>
+
+        <div class="col-12 mt-3 d-flex flex-column flex-lg-row align-items-center justify-content-center gap-2">
+          <label for="sheetSelect" class="form-label mb-0 fw-bold" style="white-space:nowrap;font-size:18px;">
+            Feuille de calcul :
+          </label>
+          <select id="sheetSelect" class="form-select" style="max-width: 280px;"></select>
+        </div>
+      </div>
     </header>
 
     <div class="card shadow-sm p-3 p-lg-4">
-        <div class="row g-4">
-            <!-- IMAGE -->
-            <div class="col-12 col-lg-6">
-                <div class="mb-2">
-                    <label class="form-label fw-semibold">Photo du ticket</label>
-                    <div class="d-grid gap-2">
-                        <label for="file" class="btn btn-primary">📷 Prendre une photo</label>
-                    </div>
-                    <input id="file" type="file" accept="image/*" capture="environment"/>
-                </div>
-                <div class="preview-box"><img id="preview" alt="Prévisualisation"/></div>
+      <div class="row g-4">
+        <!-- IMAGE -->
+        <div class="col-12 col-lg-6">
+          <div class="mb-2">
+            <label for="file" class="form-label fw-semibold">Photo du ticket</label>
+            <div class="d-grid gap-2">
+              <label for="file" class="btn btn-primary">📷 Prendre une photo</label>
             </div>
+            <input id="file" type="file" accept="image/*" capture="environment"/>
+            <div class="form-text text-muted">Astuce : ticket bien à plat, lumière homogène, cadre serré.</div>
+          </div>
 
-            <!-- FORM -->
-            <div class="col-12 col-lg-6">
-                <div class="mb-3">
-                    <label class="form-label fw-semibold">Qui scanne ?</label>
-                    <div class="btn-group w-100">
-                        <input type="radio" class="btn-check" name="who" id="who-sab" value="Sabrina">
-                        <label class="btn btn-outline-light" for="who-sab">Sabrina</label>
-                        <input type="radio" class="btn-check" name="who" id="who-mick" value="Mickael" checked>
-                        <label class="btn btn-outline-light" for="who-mick">Mickael</label>
-                    </div>
-                </div>
-
-                <div class="mb-3">
-                    <label class="form-label fw-semibold">Intitulé</label>
-                    <input id="merchant" type="text" class="form-control"/>
-                    <div id="merchantCandidates" class="mt-2"></div>
-                </div>
-
-                <div class="mb-3">
-                    <label class="form-label fw-semibold">Date</label>
-                    <input id="date" type="text" class="form-control"/>
-                    <div id="dateCandidates" class="mt-2"></div>
-                </div>
-
-                <div class="mb-3">
-                    <label class="form-label fw-semibold">Total (€)</label>
-                    <input id="total" type="text" class="form-control"/>
-                    <div id="totalCandidates" class="mt-2"></div>
-                </div>
-            </div>
+          <div class="preview-box">
+            <img id="preview" alt="Prévisualisation"/>
+          </div>
         </div>
 
-        <div id="status" class="mt-3 statusbar">Prêt.</div>
+        <!-- FORM -->
+        <div class="col-12 col-lg-6">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Qui scanne ?</label>
+            <div class="btn-group w-100" role="group" aria-label="Qui scanne">
+              <input type="radio" class="btn-check" name="who" id="who-sab" autocomplete="off" value="Sabrina">
+              <label class="btn btn-outline-light" for="who-sab">Sabrina</label>
+
+              <input type="radio" class="btn-check" name="who" id="who-mick" autocomplete="off" value="Mickael" checked>
+              <label class="btn btn-outline-light" for="who-mick">Mickael</label>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Intitulé (enseigne)</label>
+            <input id="merchant" type="text" class="form-control" placeholder="Ex : ASF, CARREFOUR CITY"/>
+            <div id="merchantCandidates" class="suggestions"></div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Date</label>
+            <input id="date" type="text" inputmode="numeric" class="form-control" placeholder="jj/mm/aaaa"/>
+            <div id="dateCandidates" class="suggestions"></div>
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Total (€)</label>
+            <input id="total" type="text" inputmode="decimal" class="form-control" placeholder="Ex : 162,05"/>
+            <div id="totalCandidates" class="suggestions"></div>
+            <div class="form-text text-muted">Enregistré en <b>monnaie €</b> (nombre formaté).</div>
+          </div>
+
+          <!-- Boutons (dans le flux, sous Total) -->
+          <div class="actions-mobile">
+            <button class="btn btn-success" id="btnSave" disabled>Enregistrer dans le Google Sheet</button>
+            <button class="btn btn-danger" id="btnReset">Réinitialiser</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3 statusbar" id="status">Prêt.</div>
     </div>
-</div>
+  </div>
 
-<!-- Mobile actions -->
-<div class="actions-mobile d-lg-none">
-    <button class="btn btn-success" id="btnSave_m" disabled>Enregistrer</button>
-    <button class="btn btn-danger" id="btnReset_m">Réinitialiser</button>
-</div>
-
-<script src="assets/js/app.js"></script>
+  <!-- Code de l'app -->
+  <script src="assets/js/app.js"></script>
 </body>
 </html>
