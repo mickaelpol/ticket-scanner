@@ -1,7 +1,11 @@
 // === CONFIG ===
-const CLIENT_ID = "TON_CLIENT_ID.apps.googleusercontent.com";
+const SCRIPT_ID = '1dkuTGVPxWwq5Ib6EK2iLsJt9HjjH1ll1iMbMB8-ebSEUiUsLmsNqNCGh';   // ID du projet Apps Script
+const CLIENT_ID = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';   // ID client OAuth (Application Web)
+const DEFAULT_SHEET   = 'Août 2025';            // Onglet sélectionné par défaut
+const ALLOWED_EMAILS  = ['polmickael3@gmail.com', 'sabrinamedjoub@gmail.com']; // accès restreint
+const OCR_LANG        = 'fra+eng+spa'; // français + anglais + espagnol (ton ticket est en ES)
 const API_KEY = "TA_CLE_API";
-const SPREADSHEET_ID = "TON_SPREADSHEET_ID"; // l’ID du Google Sheet
+const SPREADSHEET_ID = "1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI"; // l’ID du Google Sheet
 const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
 
 // === GOOGLE AUTH ===
