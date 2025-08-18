@@ -2,7 +2,7 @@
   --safe-bottom: env(safe-area-inset-bottom);
 }
 
-/* ===== Base ===== */
+/* Base */
 body {
   background: #0b1020;
   color: #e5e7eb;
@@ -18,9 +18,7 @@ body {
 }
 
 /* Gros contrôles (mobile first) */
-.form-control,
-.btn,
-.form-select {
+.form-control, .btn, .form-select {
   font-size: 18px;
   padding: 14px 16px;
   border-radius: .9rem;
@@ -31,7 +29,7 @@ body {
   color: #fff;
 }
 
-/* ===== Image preview ===== */
+/* Aperçu image */
 .preview-box {
   border: 1px dashed #1f2937;
   border-radius: 1rem;
@@ -48,15 +46,15 @@ body {
   object-fit: contain;
 }
 
-/* ===== Suggestions (chips) ===== */
+/* Suggestions (chips) */
 .suggestions {
-  margin-top: .25rem;
+  margin-top: .4rem;
 }
 
 .suggestions .chip {
   display: inline-block;
   margin: 0 .4rem .4rem 0;
-  padding: .35rem .7rem;
+  padding: .38rem .8rem;
   border: 1px solid #334155;
   border-radius: 999px;
   background: #0b1220;
@@ -70,34 +68,14 @@ body {
 .suggestions .chip:hover { background: #111b36; }
 .suggestions .chip:active { transform: scale(0.98); }
 
-/* ===== Boutons en bas : dans le flux (ne recouvrent rien) ===== */
-/* On garde la classe .actions-mobile si tu la utilises encore,
-   mais on la rend *non fixe* pour éviter tout chevauchement. */
+/* Boutons sous le formulaire (dans le flux) */
 .actions-mobile {
-  position: static;
-  left: auto;
-  right: auto;
-  bottom: auto;
-  z-index: auto;
-  background: transparent;
-  padding: 0;
   display: grid;
   grid-template-columns: 1fr;
   gap: .75rem;
 }
 
-/* Ancien style « fixé » (si jamais tu veux revenir au footer fixe) :
-   il suffit d’ajouter .is-fixed à l’élément .actions-mobile
-   ET de prévoir un padding-bottom sur le conteneur principal. */
-.actions-mobile.is-fixed {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  z-index: 1030;
-  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, #0b1020 25%);
-  padding: .75rem 1rem calc(1rem + var(--safe-bottom));
-}
-
-/* ===== Input file masqué (déclenché par le bouton) ===== */
+/* Input file masqué (déclenché par le bouton) */
 input[type="file"] {
   position: absolute;
   left: -9999px;
@@ -106,7 +84,7 @@ input[type="file"] {
   overflow: hidden;
 }
 
-/* ===== Barre de statut ===== */
+/* Barre d'état */
 .statusbar {
   color: #ffffff;
   background: #0f162e;
@@ -115,11 +93,7 @@ input[type="file"] {
   border-radius: .75rem;
 }
 
-/* ===== Ajustements desktop ===== */
+/* Desktop – police un peu plus petite si souhaité */
 @media (min-width: 992px) {
-  .form-control,
-  .btn,
-  .form-select {
-    font-size: 16px;
-  }
+  .form-control, .btn, .form-select { font-size: 16px; }
 }
