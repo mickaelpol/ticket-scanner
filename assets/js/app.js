@@ -1,8 +1,8 @@
 /* =========================
    CONFIG Google / Apps Script
    ========================= */
-const SCRIPT_ID = 'TON_SCRIPT_ID_APPS_SCRIPT'; // ⚠️ ID du script (Paramètres du projet → ID du script)
-const CLIENT_ID = 'TON_CLIENT_ID_OAUTH.apps.googleusercontent.com';
+const SCRIPT_ID = '1dkuTGVPxWwq5Ib6EK2iLsJt9HjjH1ll1iMbMB8-ebSEUiUsLmsNqNCGh';   // ID du projet Apps Script
+const CLIENT_ID = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';   // ID client OAuth (Application Web)
 const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/script.projects',
