@@ -74,13 +74,26 @@ async function bootGoogle(){
   // Init gapi
   if (typeof gapi !== 'undefined') {
     await new Promise(resolve => gapi.load('client', resolve));
-    await gapi.client.init({
-      apiKey: API_KEY,
-      discoveryDocs: [
+
+    // on construit la config sans apiKey si elle est vide
+    const initConfig = {
+    discoveryDocs: [
         'https://sheets.googleapis.com/$discovery/rest?version=v4',
         'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest'
-      ]
-    });
+    ]
+    };
+    if (API_KEY && ! /VOTRE_API_KEY/i.test(API_KEY)) {
+    initConfig.apiKey = API_KEY;
+    }
+
+    try {
+    await gapi.client.init(initConfig);
+    gapiReady = true;
+    } catch (e) {
+    console.error('gapi.init failed:', e);
+    setStatus('Échec init Google API (vérifie CLIENT_ID / origine autorisée).');
+    return; // on ne continue pas sinon ensureConnected plantera
+    }
     gapiReady = true;
   }
 
