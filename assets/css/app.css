@@ -1,91 +1,125 @@
 :root {
-    --safe-bottom: env(safe-area-inset-bottom);
+  --safe-bottom: env(safe-area-inset-bottom);
 }
 
+/* ===== Base ===== */
 body {
-    background: #0b1020;
-    color: #e5e7eb;
+  background: #0b1020;
+  color: #e5e7eb;
 }
 
 .card {
-    background: #0f162e;
-    border: 1px solid #1f2937;
+  background: #0f162e;
+  border: 1px solid #1f2937;
 }
 
 .text-muted {
-    color: #9ca3af !important;
+  color: #9ca3af !important;
 }
 
-.form-control, .btn, .form-select {
-    font-size: 18px;
-    padding: 14px 16px;
-    border-radius: .9rem;
-}
-
-.chip.btn {
-    font-size: 16px;
-    padding: 10px 14px;
-    border-radius: 999px;
+/* Gros contrôles (mobile first) */
+.form-control,
+.btn,
+.form-select {
+  font-size: 18px;
+  padding: 14px 16px;
+  border-radius: .9rem;
 }
 
 .form-label {
-    font-size: 16px;
-    color: #fff;
+  font-size: 16px;
+  color: #fff;
 }
 
+/* ===== Image preview ===== */
 .preview-box {
-    border: 1px dashed #1f2937;
-    border-radius: 1rem;
-    aspect-ratio: 4/3;
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    background: #0b1226;
+  border: 1px dashed #1f2937;
+  border-radius: 1rem;
+  aspect-ratio: 4 / 3;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #0b1226;
 }
 
 #preview {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
+/* ===== Suggestions (chips) ===== */
+.suggestions {
+  margin-top: .25rem;
+}
+
+.suggestions .chip {
+  display: inline-block;
+  margin: 0 .4rem .4rem 0;
+  padding: .35rem .7rem;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  background: #0b1220;
+  color: #e5e7eb;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.suggestions .chip:hover { background: #111b36; }
+.suggestions .chip:active { transform: scale(0.98); }
+
+/* ===== Boutons en bas : dans le flux (ne recouvrent rien) ===== */
+/* On garde la classe .actions-mobile si tu la utilises encore,
+   mais on la rend *non fixe* pour éviter tout chevauchement. */
 .actions-mobile {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 1030;
-    background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, #0b1020 20%);
-    padding: .75rem 1rem calc(1rem + var(--safe-bottom));
-    display: grid;
-    grid-template-columns:1fr;
-    gap: .75rem;
+  position: static;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  z-index: auto;
+  background: transparent;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: .75rem;
 }
 
-@media (min-width: 992px) {
-    .actions-mobile {
-        position: static;
-        background: transparent;
-        padding: 0;
-    }
+/* Ancien style « fixé » (si jamais tu veux revenir au footer fixe) :
+   il suffit d’ajouter .is-fixed à l’élément .actions-mobile
+   ET de prévoir un padding-bottom sur le conteneur principal. */
+.actions-mobile.is-fixed {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 1030;
+  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, #0b1020 25%);
+  padding: .75rem 1rem calc(1rem + var(--safe-bottom));
 }
 
+/* ===== Input file masqué (déclenché par le bouton) ===== */
 input[type="file"] {
-    position: absolute;
-    left: -9999px;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
+  position: absolute;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
 }
 
+/* ===== Barre de statut ===== */
 .statusbar {
-    position: sticky;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    color: #ffffff;
-    background: #0f162e;
-    border: 1px solid #1f2937;
-    padding: .5rem .75rem;
-    border-radius: .75rem;
+  color: #ffffff;
+  background: #0f162e;
+  border: 1px solid #1f2937;
+  padding: .5rem .75rem;
+  border-radius: .75rem;
+}
+
+/* ===== Ajustements desktop ===== */
+@media (min-width: 992px) {
+  .form-control,
+  .btn,
+  .form-select {
+    font-size: 16px;
+  }
 }
