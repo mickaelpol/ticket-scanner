@@ -48,6 +48,7 @@ function bindUI(){
     catch(e){ console.error(e); setStatus('Échec connexion'); }
   });
 }
+
 function bindChips(containerId, inputId){
   const box = document.getElementById(containerId);
   box.addEventListener('click', (e) => {
@@ -56,11 +57,18 @@ function bindChips(containerId, inputId){
     document.getElementById(inputId).value = chip.getAttribute('data-v');
   });
 }
+
 function resetForm(){
   $('#file').value=''; $('#preview').src='';
   ['merchant','date','total'].forEach(id=>$('#'+id).value='');
   ['merchantCandidates','dateCandidates','totalCandidates'].forEach(id=>$('#'+id).innerHTML='');
   enableSave(false); setStatus('Prêt.');
+}
+
+function parseEuroToNumber(s){
+  if (!s) return null;
+  const n = parseFloat(String(s).replace(/\s+/g,'').replace('€','').replace(',','.'));
+  return Number.isFinite(n) ? n : null;
 }
 
 /* =======================
@@ -75,26 +83,22 @@ async function bootGoogle(){
   if (typeof gapi !== 'undefined') {
     await new Promise(resolve => gapi.load('client', resolve));
 
-    // on construit la config sans apiKey si elle est vide
     const initConfig = {
-    discoveryDocs: [
+      discoveryDocs: [
         'https://sheets.googleapis.com/$discovery/rest?version=v4',
         'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest'
-    ]
+      ]
     };
-    if (API_KEY && ! /VOTRE_API_KEY/i.test(API_KEY)) {
-    initConfig.apiKey = API_KEY;
-    }
+    if (API_KEY && !/VOTRE_API_KEY/i.test(API_KEY)) initConfig.apiKey = API_KEY;
 
     try {
-    await gapi.client.init(initConfig);
-    gapiReady = true;
+      await gapi.client.init(initConfig);
+      gapiReady = true;
     } catch (e) {
-    console.error('gapi.init failed:', e);
-    setStatus('Échec init Google API (vérifie CLIENT_ID / origine autorisée).');
-    return; // on ne continue pas sinon ensureConnected plantera
+      console.error('gapi.init failed:', e);
+      setStatus('Échec init Google API (vérifie CLIENT_ID / origine autorisée).');
+      return;
     }
-    gapiReady = true;
   }
 
   // Init GIS
@@ -127,7 +131,7 @@ function showAuthNeeded(){
 
 async function ensureConnected(forceConsent=false){
   if (!gapiReady || !gisReady) throw new Error('SDK Google non initialisés');
-  if (accessToken) return; // déjà ok
+  if (accessToken) return;
 
   await new Promise((resolve, reject)=>{
     tokenClient.callback = (resp)=>{
@@ -254,7 +258,6 @@ function parseReceipt(text){
   const lines = (text||'').split(/\r?\n/).map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);
   const whole = lines.join('\n');
 
-  // Intitulé : majuscules plausibles en tête, + mots connus (inclut ASF)
   const known = /(ASF|VINCI|CARREFOUR|LECLERC|E\.?LECLERC|INTERMARCHÉ|AUCHAN|LIDL|MONOPRIX|CASINO|ALDI|DECATHLON|ACTION|FNAC|DARTY|BOULANGER|PICARD|BIOCOOP|PRIMARK|ZARA|IKEA|H&M|TOTAL(?:\s?ENERGIES)?)/i;
   const bad = /(SIRET|TVA|FACTURE|TICKET|N[°o]|NUMÉRO|CARTE|PAIEMENT|VENTE|CAISSE|CLIENT|TEL|WWW|HTTP|EMAIL|SITE\s+WEB)/i;
   const looksAddr = /(RUE|AVENUE|BD|BOULEVARD|PLACE|CHEMIN|IMPASSE|FRANCE|\b\d{5}\b)/i;
@@ -267,11 +270,9 @@ function parseReceipt(text){
     else if (/^[A-ZÀ-ÖØ-Þ0-9\.\- ']{2,40}$/.test(L)) merchants.push(L);
   }
 
-  // Dates
   const dates = [...whole.matchAll(/\b(\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4})\b/g)]
     .map(m=>normalizeDate(m[1])).filter(Boolean);
 
-  // Totaux
   let totals = [];
   const keyRxs = [
     /TOTAL\s*TT?C?\s*[:\-]?\s*([\d\s]+[.,]\d{2})\s*(?:€|EUR)?/i,
@@ -350,8 +351,8 @@ function toFrMoney(s){
 ======================= */
 async function saveToSheet(){
   try {
-    await ensureConnected(false);                       // <-- corrige le “Non connecté”
-    const me = await gapi.client.oauth2.userinfo.get(); // contrôle d’accès
+    await ensureConnected(false);
+    const me = await gapi.client.oauth2.userinfo.get();
     const email = (me.result?.email || '').toLowerCase();
     if (!ALLOWED_EMAILS.includes(email)) throw new Error('Adresse non autorisée');
 
@@ -364,23 +365,24 @@ async function saveToSheet(){
 
     const label   = ($('#merchant').value || '').trim();
     const dateStr = normalizeDate($('#date').value);
-    const totalFR = toFrMoney($('#total').value);
 
-    if (!label || !dateStr || !totalFR) throw new Error('Champs incomplets');
+    // >>> CHANGEMENT : envoyer un NOMBRE (pas une chaîne)
+    const totalNum = parseEuroToNumber($('#total').value);
+    if (!label || !dateStr || totalNum == null) throw new Error('Champs incomplets');
 
     setStatus('Recherche de la prochaine ligne libre…');
     const row = await findNextEmptyRow(sheetName, cols.label, 11);
 
     setStatus('Écriture…');
-    // 1) valeurs
+    // 1) valeurs : USER_ENTERED + nombre pour le total
     await gapi.client.sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
       range: `${sheetName}!${cols.label}${row}:${cols.total}${row}`,
       valueInputOption: 'USER_ENTERED',
-      resource: { values: [[ label, dateStr, totalFR ]] }
+      resource: { values: [[ label, dateStr, totalNum ]] }
     });
 
-    // 2) formats (date + €) – nécessite sheetId (on l’a via listSheets)
+    // 2) formats (date + € à DROITE)
     const sid = sheetNameToId[sheetName];
     if (sid != null) {
       await gapi.client.sheets.spreadsheets.batchUpdate({
@@ -397,7 +399,8 @@ async function saveToSheet(){
             {
               repeatCell: {
                 range: gridRangeFromA1(sid, `${cols.total}${row}:${cols.total}${row}`),
-                cell: { userEnteredFormat: { numberFormat: { type: 'CURRENCY', pattern: '€#,##0.00' } } },
+                // >>> CHANGEMENT : motif personnalisé — symbole € APRÈS le nombre
+                cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0.00 "€"' } } },
                 fields: 'userEnteredFormat.numberFormat'
               }
             }
