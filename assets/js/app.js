@@ -1,445 +1,827 @@
-/* =======================
-   CONFIG (À RENSEIGNER)
-======================= */
-const ALLOWED_EMAILS = ['polmickael3@gmail.com','sabrinamedjoub@gmail.com'].map(e=>e.toLowerCase());
-const SCRIPT_ID = '1dkuTGVPxWwq5Ib6EK2iLsJt9HjjH1ll1iMbMB8-ebSEUiUsLmsNqNCGh';   // ID du projet Apps Script
-const CLIENT_ID = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';   // ID client OAuth (Application Web)
-const API_KEY         = 'VOTRE_API_KEY'; // facultatif si tout passe par OAuth, utile pour discovery
-const SPREADSHEET_ID  = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI'; // ID du Google Sheet
-const DEFAULT_SHEET   = 'Août 2025';            // Onglet sélectionné par défaut
-const OCR_LANG        = 'fra+eng+spa'; // français + anglais + espagnol (ton ticket est en ES)
+/* app.js — Scanner de tickets (OpenCV.js + Tesseract.js)
+ *
+ * ✅ Objectifs :
+ *  - Prétraitement robuste d’image (sans fastNlMeansDenoising)
+ *  - Deskew (redressement) + binarisation adaptés aux tickets
+ *  - OCR (fra+eng) avec Tesseract.js
+ *  - Extraction fiable : date, lignes d’articles (intitulé + prix), total
+ *
+ * 📦 Dépendances attendues dans la page :
+ *    <script src="https://docs.opencv.org/4.x/opencv.js"></script>
+ *    <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+ *
+ * ℹ️ Intégration :
+ *  - Placez ce fichier tel quel.
+ *  - Si votre HTML contient déjà des éléments,
+ *    l’app tentera d’utiliser (dans cet ordre) :
+ *      input[type=file] avec id #receipt-file, #file, [data-receipt-input]
+ *      canvas avec id #preview, #canvas, [data-receipt-canvas]
+ *      zone résultat avec id #results, #output, [data-receipt-output]
+ *  - Si rien n’est trouvé, une UI minimale est créée automatiquement.
+ */
 
-/* =======================
-   ÉTAT GLOBAL
-======================= */
-let accessToken = null;
-let tokenClient = null;
-let gapiReady = false;
-let gisReady  = false;
-let currentUserEmail = null;
-let sheetNameToId = {};
+(() => {
+  'use strict';
 
-const $ = s => document.querySelector(s);
-const setStatus  = msg => { $('#status').textContent = msg; };
-const enableSave = on  => { $('#btnSave').disabled = !on; };
+  /*** ------------------------- Utils DOM / Loader -------------------------- ***/
 
-/* =======================
-   BOOT
-======================= */
-document.addEventListener('DOMContentLoaded', () => {
-  bindUI();
-  bootGoogle(); // charge/initialise gapi + GIS sans dépendre d'attributs onload dans le HTML
-});
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
-/* =======================
-   UI
-======================= */
-function bindUI(){
-  bindChips('merchantCandidates','merchant');
-  bindChips('dateCandidates','date');
-  bindChips('totalCandidates','total');
-
-  $('#file').addEventListener('change', handleImageChange);
-  $('#btnSave').addEventListener('click', saveToSheet);
-  $('#btnReset').addEventListener('click', resetForm);
-
-  $('#btnAuth').addEventListener('click', async () => {
-    try { setStatus('Connexion…'); await ensureConnected(true); await updateAuthUI(); await listSheets(); setStatus('Connecté ✓'); }
-    catch(e){ console.error(e); setStatus('Échec connexion'); }
-  });
-}
-
-function bindChips(containerId, inputId){
-  const box = document.getElementById(containerId);
-  box.addEventListener('click', (e) => {
-    const chip = e.target.closest('.chip');
-    if (!chip) return;
-    document.getElementById(inputId).value = chip.getAttribute('data-v');
-  });
-}
-
-function resetForm(){
-  $('#file').value=''; $('#preview').src='';
-  ['merchant','date','total'].forEach(id=>$('#'+id).value='');
-  ['merchantCandidates','dateCandidates','totalCandidates'].forEach(id=>$('#'+id).innerHTML='');
-  enableSave(false); setStatus('Prêt.');
-}
-
-function parseEuroToNumber(s){
-  if (!s) return null;
-  const n = parseFloat(String(s).replace(/\s+/g,'').replace('€','').replace(',','.'));
-  return Number.isFinite(n) ? n : null;
-}
-
-/* =======================
-   GOOGLE SDK (boot sans onload)
-======================= */
-async function bootGoogle(){
-  // Attendre que les scripts soient chargés
-  await waitFor(()=>typeof gapi!=='undefined',150,10000).catch(()=>{});
-  await waitFor(()=>window.google && google.accounts && google.accounts.oauth2,150,10000).catch(()=>{});
-
-  // Init gapi
-  if (typeof gapi !== 'undefined') {
-    await new Promise(resolve => gapi.load('client', resolve));
-
-    const initConfig = {
-      discoveryDocs: [
-        'https://sheets.googleapis.com/$discovery/rest?version=v4',
-        'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest'
-      ]
-    };
-    if (API_KEY && !/VOTRE_API_KEY/i.test(API_KEY)) initConfig.apiKey = API_KEY;
-
-    try {
-      await gapi.client.init(initConfig);
-      gapiReady = true;
-    } catch (e) {
-      console.error('gapi.init failed:', e);
-      setStatus('Échec init Google API (vérifie CLIENT_ID / origine autorisée).');
-      return;
+  const firstExisting = (selectors) => {
+    for (const s of selectors) {
+      const el = $(s);
+      if (el) return el;
     }
-  }
-
-  // Init GIS
-  if (window.google?.accounts?.oauth2) {
-    tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email',
-      prompt: '',
-      callback: async (resp) => {
-        if (resp.error) { showAuthNeeded(); return; }
-        accessToken = resp.access_token;
-        gapi.client.setToken({ access_token: accessToken });
-        await updateAuthUI();
-        await listSheets();
-      }
-    });
-    gisReady = true;
-  }
-
-  // Tentative silencieuse (si déjà consenti & session active)
-  try { await ensureConnected(false); } catch(_) {}
-  await updateAuthUI();
-  await listSheets();
-}
-
-function showAuthNeeded(){
-  $('#btnAuth').style.display = 'inline-block';
-  $('#authStatus').textContent = 'Autorisation nécessaire';
-}
-
-async function ensureConnected(forceConsent=false){
-  if (!gapiReady || !gisReady) throw new Error('SDK Google non initialisés');
-  if (accessToken) return;
-
-  await new Promise((resolve, reject)=>{
-    tokenClient.callback = (resp)=>{
-      if (resp?.error) return reject(resp);
-      accessToken = resp.access_token;
-      gapi.client.setToken({ access_token: accessToken });
-      resolve();
-    };
-    tokenClient.requestAccessToken({ prompt: forceConsent ? 'consent' : '' });
-  });
-}
-
-async function updateAuthUI(){
-  try {
-    if (!accessToken) { showAuthNeeded(); return; }
-    const me = await gapi.client.oauth2.userinfo.get();
-    currentUserEmail = (me.result?.email || '').toLowerCase();
-    if (!currentUserEmail) { showAuthNeeded(); return; }
-    const ok = ALLOWED_EMAILS.includes(currentUserEmail);
-    $('#authStatus').innerHTML = ok
-      ? `Connecté · <span class="text-success">${currentUserEmail}</span>`
-      : `Connecté · <span class="text-danger">accès refusé</span>`;
-    $('#btnAuth').style.display = ok ? 'none' : 'inline-block';
-  } catch(e){
-    console.warn(e); showAuthNeeded();
-  }
-}
-
-async function listSheets(){
-  if (!accessToken) return;
-  try {
-    const resp = await gapi.client.sheets.spreadsheets.get({
-      spreadsheetId: SPREADSHEET_ID,
-      fields: 'sheets(properties(sheetId,title))'
-    });
-    const props = (resp.result.sheets||[]).map(s=>s.properties);
-    sheetNameToId = {};
-    const sel = $('#sheetSelect');
-    sel.innerHTML = props.map(p => {
-      sheetNameToId[p.title] = p.sheetId;
-      return `<option ${p.title===DEFAULT_SHEET?'selected':''}>${p.title}</option>`;
-    }).join('');
-  } catch(e){
-    console.warn('listSheets:', e);
-  }
-}
-
-function waitFor(test, every=100, timeout=10000){
-  return new Promise((resolve,reject)=>{
-    const t0 = Date.now();
-    (function loop(){
-      try { if (test()) return resolve(); } catch(_){}
-      if (Date.now() - t0 > timeout) return reject(new Error('waitFor timeout'));
-      setTimeout(loop, every);
-    })();
-  });
-}
-
-/* =======================
-   IMAGE → PREPROC → OCR
-======================= */
-async function handleImageChange(e){
-  const file = e.target.files?.[0];
-  if (!file) return;
-  setStatus('Préparation de l’image…');
-
-  const rawB64 = await fileToBase64(file);
-  const b64 = await enhanceForOCR(rawB64).catch(()=>rawB64);
-  $('#preview').src = 'data:image/jpeg;base64,' + b64;
-
-  setStatus('Analyse (OCR)…');
-  const text = await runOCR(b64);
-
-  const parsed = parseReceipt(text);
-  applyCandidates(parsed);
-  setStatus('Vérifie / ajuste puis “Enregistrer”.');
-  enableSave(true);
-}
-
-function fileToBase64(file){
-  return new Promise((res,rej)=>{
-    const r = new FileReader();
-    r.onload = ()=>res(r.result.split(',')[1]);
-    r.onerror = rej;
-    r.readAsDataURL(file);
-  });
-}
-
-async function enhanceForOCR(base64){
-  if (!window._opencvReady || !window.cv) return base64;
-  return new Promise((resolve)=>{
-    const img = new Image();
-    img.onload = ()=>{
-      const c = document.createElement('canvas'), ctx = c.getContext('2d');
-      c.width=img.width; c.height=img.height; ctx.drawImage(img,0,0);
-
-      const src = cv.imread(c);
-      let gray=new cv.Mat(); cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY,0);
-      let equal=new cv.Mat(); cv.equalizeHist(gray,equal);
-      let blur =new cv.Mat(); cv.GaussianBlur(equal,blur,new cv.Size(3,3),0,0,cv.BORDER_DEFAULT);
-      let bw   =new cv.Mat();
-      cv.adaptiveThreshold(blur,bw,255,cv.ADAPTIVE_THRESH_GAUSSIAN_C,cv.THRESH_BINARY,33,15);
-
-      cv.imshow(c,bw);
-      const out = c.toDataURL('image/jpeg',0.95).split(',')[1];
-      [src,gray,equal,blur,bw].forEach(m=>m.delete());
-      resolve(out);
-    };
-    img.src = 'data:image/jpeg;base64,'+base64;
-  });
-}
-
-async function runOCR(base64){
-  const { data:{ text } } = await Tesseract.recognize(
-    'data:image/jpeg;base64,'+base64, OCR_LANG, { logger:()=>{} }
-  );
-  return text || '';
-}
-
-/* =======================
-   PARSING + SUGGESTIONS
-======================= */
-function parseReceipt(text){
-  const lines = (text||'').split(/\r?\n/).map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean);
-  const whole = lines.join('\n');
-
-  const known = /(ASF|VINCI|CARREFOUR|LECLERC|E\.?LECLERC|INTERMARCHÉ|AUCHAN|LIDL|MONOPRIX|CASINO|ALDI|DECATHLON|ACTION|FNAC|DARTY|BOULANGER|PICARD|BIOCOOP|PRIMARK|ZARA|IKEA|H&M|TOTAL(?:\s?ENERGIES)?)/i;
-  const bad = /(SIRET|TVA|FACTURE|TICKET|N[°o]|NUMÉRO|CARTE|PAIEMENT|VENTE|CAISSE|CLIENT|TEL|WWW|HTTP|EMAIL|SITE\s+WEB)/i;
-  const looksAddr = /(RUE|AVENUE|BD|BOULEVARD|PLACE|CHEMIN|IMPASSE|FRANCE|\b\d{5}\b)/i;
-
-  const merchants = [];
-  for (let i=0;i<Math.min(lines.length,15);i++){
-    const L = lines[i];
-    if (!L || bad.test(L) || looksAddr.test(L)) continue;
-    if (known.test(L)) merchants.unshift(L);
-    else if (/^[A-ZÀ-ÖØ-Þ0-9\.\- ']{2,40}$/.test(L)) merchants.push(L);
-  }
-
-  const dates = [...whole.matchAll(/\b(\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4})\b/g)]
-    .map(m=>normalizeDate(m[1])).filter(Boolean);
-
-  let totals = [];
-  const keyRxs = [
-    /TOTAL\s*TT?C?\s*[:\-]?\s*([\d\s]+[.,]\d{2})\s*(?:€|EUR)?/i,
-    /TOTAL\s+À\s+PAYER\s*[:\-]?\s*([\d\s]+[.,]\d{2})/i,
-    /NET\s+À\s+PAYER\s*[:\-]?\s*([\d\s]+[.,]\d{2})/i,
-    /TOTAL\s+CB\s*[:\-]?\s*([\d\s]+[.,]\d{2})/i,
-    /IMPORTE\s*[:\-]?\s*([\d\s]+[.,]\d{2})/i
-  ];
-  for (const rx of keyRxs){ const m=whole.match(rx); if (m){ totals.push(m[1]); break; } }
-
-  const amtRxs = [
-    /(\d[\d\s]{0,3}(?:\s?\d{3})*[.,]\d{2})\s*(?:€|EUR)\b/gi,
-    /\b(\d[\d\s]{0,3}(?:\s?\d{3})*[.,]\d{2})\b(?!\s*%)/g
-  ];
-  const amts=[];
-  lines.forEach(L=>{
-    for (const rx of amtRxs){
-      rx.lastIndex=0; let m;
-      while((m=rx.exec(L))){
-        const v=parseFloat(m[1].replace(/\s/g,'').replace(',','.'));
-        if (Number.isFinite(v) && v>=0.2 && v<=10000) amts.push({raw:m[1], val:v});
-      }
-    }
-  });
-  amts.sort((a,b)=>b.val-a.val);
-  for (const a of amts){
-    if (!totals.find(t=>normNum(t)===normNum(a.raw))){
-      totals.push(a.raw);
-      if (totals.length>=6) break;
-    }
-  }
-
-  return {
-    merchants: unique(merchants).slice(0,6),
-    dates: unique(dates).slice(0,6),
-    totals: unique(totals).slice(0,6)
+    return null;
   };
-}
 
-function applyCandidates(c){
-  $('#merchant').value = c.merchants[0] || '';
-  $('#merchantCandidates').innerHTML = chipsHTML(c.merchants);
+  const createEl = (tag, attrs = {}, parent = null) => {
+    const el = document.createElement(tag);
+    Object.entries(attrs).forEach(([k, v]) => {
+      if (k === 'text') el.textContent = v;
+      else if (k === 'html') el.innerHTML = v;
+      else el.setAttribute(k, v);
+    });
+    if (parent) parent.appendChild(el);
+    return el;
+  };
 
-  $('#date').value = c.dates[0] || '';
-  $('#dateCandidates').innerHTML = chipsHTML(c.dates);
-
-  $('#total').value = toFrMoney(c.totals[0] || '');
-  $('#totalCandidates').innerHTML = chipsHTML(c.totals.map(toFrMoney));
-}
-
-const chipsHTML = arr =>
-  (arr && arr.length)
-    ? arr.map(v=>`<span class="chip" data-v="${escapeHtml(v)}">${escapeHtml(v)}</span>`).join('')
-    : `<span class="text-muted small">—</span>`;
-
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;" }[m])); }
-function unique(arr){ return [...new Set(arr.map(s=>s.trim()).filter(Boolean))]; }
-function normNum(s){ return String(s).replace(/\s/g,'').replace(',', '.'); }
-
-function normalizeDate(s){
-  const m = String(s||'').match(/^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{2,4})$/);
-  if (!m) return '';
-  let [_, d, mo, y]=m; d=+d; mo=+mo; y=+y; if (y<100) y+=2000;
-  if (d<1||d>31||mo<1||mo>12) return '';
-  return `${String(d).padStart(2,'0')}/${String(mo).padStart(2,'0')}/${y}`;
-}
-function toFrMoney(s){
-  if (!s) return '';
-  const n = parseFloat(String(s).replace(/\s/g,'').replace(',', '.'));
-  if (!Number.isFinite(n)) return String(s);
-  return n.toFixed(2).replace('.', ',');
-}
-
-/* =======================
-   ENREGISTREMENT SHEETS
-======================= */
-async function saveToSheet(){
-  try {
-    await ensureConnected(false);
-    const me = await gapi.client.oauth2.userinfo.get();
-    const email = (me.result?.email || '').toLowerCase();
-    if (!ALLOWED_EMAILS.includes(email)) throw new Error('Adresse non autorisée');
-
-    const who = document.querySelector('input[name="who"]:checked')?.value || '';
-    const sheetName = $('#sheetSelect').value || DEFAULT_SHEET;
-
-    const cols = (who.toLowerCase().startsWith('sab'))
-      ? {label:'K', date:'L', total:'M'}
-      : {label:'O', date:'P', total:'Q'};
-
-    const label   = ($('#merchant').value || '').trim();
-    const dateStr = normalizeDate($('#date').value);
-
-    // >>> CHANGEMENT : envoyer un NOMBRE (pas une chaîne)
-    const totalNum = parseEuroToNumber($('#total').value);
-    if (!label || !dateStr || totalNum == null) throw new Error('Champs incomplets');
-
-    setStatus('Recherche de la prochaine ligne libre…');
-    const row = await findNextEmptyRow(sheetName, cols.label, 11);
-
-    setStatus('Écriture…');
-    // 1) valeurs : USER_ENTERED + nombre pour le total
-    await gapi.client.sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${sheetName}!${cols.label}${row}:${cols.total}${row}`,
-      valueInputOption: 'USER_ENTERED',
-      resource: { values: [[ label, dateStr, totalNum ]] }
+  const loadScript = (src) =>
+    new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
     });
 
-    // 2) formats (date + € à DROITE)
-    const sid = sheetNameToId[sheetName];
-    if (sid != null) {
-      await gapi.client.sheets.spreadsheets.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID,
-        resource: {
-          requests: [
-            {
-              repeatCell: {
-                range: gridRangeFromA1(sid, `${cols.date}${row}:${cols.date}${row}`),
-                cell: { userEnteredFormat: { numberFormat: { type: 'DATE', pattern: 'dd/mm/yyyy' } } },
-                fields: 'userEnteredFormat.numberFormat'
-              }
-            },
-            {
-              repeatCell: {
-                range: gridRangeFromA1(sid, `${cols.total}${row}:${cols.total}${row}`),
-                // >>> CHANGEMENT : motif personnalisé — symbole € APRÈS le nombre
-                cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0.00 "€"' } } },
-                fields: 'userEnteredFormat.numberFormat'
-              }
-            }
-          ]
+  const waitForOpenCV = () =>
+    new Promise((resolve, reject) => {
+      const check = () => {
+        if (window.cv && typeof cv.imread === 'function') {
+          if (cv['onRuntimeInitialized']) {
+            // opencv.js classique expose onRuntimeInitialized
+            const prev = cv.onRuntimeInitialized;
+            cv.onRuntimeInitialized = () => {
+              prev && prev();
+              resolve();
+            };
+          } else {
+            resolve();
+          }
+        } else {
+          setTimeout(check, 50);
         }
+      };
+      check();
+      setTimeout(() => reject(new Error('OpenCV not ready')), 20000);
+    });
+
+  const ensureDeps = async () => {
+    // OpenCV
+    if (!window.cv) {
+      await loadScript('https://docs.opencv.org/4.x/opencv.js');
+    }
+    await waitForOpenCV();
+
+    // Tesseract
+    if (!window.Tesseract) {
+      await loadScript('https://unpkg.com/tesseract.js@5/dist/tesseract.min.js');
+    }
+    if (!window.Tesseract) {
+      throw new Error('Tesseract failed to load');
+    }
+  };
+
+  /*** --------------------------- Canvas helpers --------------------------- ***/
+
+  const drawImageFit = (img, maxW = 1600, maxH = 1600) => {
+    const ratio = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight, 1);
+    const w = Math.round(img.naturalWidth * ratio);
+    const h = Math.round(img.naturalHeight * ratio);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    return canvas;
+  };
+
+  const rotateCanvas = (srcCanvas, angleDeg, bg = '#FFFFFF') => {
+    const angle = (angleDeg * Math.PI) / 180;
+    const s = Math.sin(angle);
+    const c = Math.cos(angle);
+    const w = srcCanvas.width;
+    const h = srcCanvas.height;
+    const newW = Math.abs(w * c) + Math.abs(h * s);
+    const newH = Math.abs(w * s) + Math.abs(h * c);
+    const out = document.createElement('canvas');
+    out.width = Math.ceil(newW);
+    out.height = Math.ceil(newH);
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.translate(out.width / 2, out.height / 2);
+    ctx.rotate(angle);
+    ctx.drawImage(srcCanvas, -w / 2, -h / 2);
+    return out;
+  };
+
+  /*** ------------------------- Image preprocessing ------------------------ ***/
+
+  const withMat = (fn) => {
+    // small helper to ensure mats are deleted
+    return (...args) => {
+      const mats = [];
+      const wrap = (m) => (mats.push(m), m);
+      try {
+        return fn(wrap, ...args);
+      } finally {
+        mats.forEach((m) => {
+          try {
+            m && typeof m.delete === 'function' && m.delete();
+          } catch (_) {}
+        });
+      }
+    };
+  };
+
+  const estimateSkewAngle = withMat((W, srcMat) => {
+    // Work on reduced copy to speed up
+    const scale = 800 / Math.max(srcMat.cols, srcMat.rows);
+    const resized = W(new cv.Mat());
+    cv.resize(srcMat, resized, new cv.Size(0, 0), scale, scale, cv.INTER_AREA);
+
+    const gray = W(new cv.Mat());
+    cv.cvtColor(resized, gray, cv.COLOR_RGBA2GRAY, 0);
+
+    const blur = W(new cv.Mat());
+    cv.GaussianBlur(gray, blur, new cv.Size(3, 3), 0, 0, cv.BORDER_DEFAULT);
+
+    const edges = W(new cv.Mat());
+    cv.Canny(blur, edges, 50, 150, 3, false);
+
+    const lines = new cv.Mat();
+    cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 100, 100, 20);
+
+    const angles = [];
+    for (let i = 0; i < lines.rows; i++) {
+      const [x1, y1, x2, y2] = lines.int32Ptr(i);
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      if (dx === 0 && dy === 0) continue;
+      const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+      // near-horizontal lines only
+      if (Math.abs(angle) <= 15) {
+        angles.push(angle);
+      }
+    }
+    lines.delete();
+
+    if (!angles.length) return 0;
+
+    // median angle is more robust to outliers
+    angles.sort((a, b) => a - b);
+    const mid = Math.floor(angles.length / 2);
+    const median = angles.length % 2 ? angles[mid] : (angles[mid - 1] + angles[mid]) / 2;
+    return median;
+  });
+
+  const preprocessForOCR = withMat((W, inCanvas) => {
+    const src = W(cv.imread(inCanvas));
+
+    // 1) Conversion en niveaux de gris
+    const gray = W(new cv.Mat());
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+
+    // 2) Lissage léger (évite la perte de détails fine des caractères)
+    const denoised = W(new cv.Mat());
+    cv.medianBlur(gray, denoised, 3); // ✅ pas de fastNlMeansDenoising
+
+    // 3) Contraste local (CLAHE) pour écriture pâle / photo sombre
+    const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
+    const enhanced = W(new cv.Mat());
+    clahe.apply(denoised, enhanced);
+    clahe.delete();
+
+    // 4) Binarisation adaptative (meilleure sur fonds non homogènes)
+    const bw = W(new cv.Mat());
+    cv.adaptiveThreshold(
+      enhanced,
+      bw,
+      255,
+      cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+      cv.THRESH_BINARY,
+      35,
+      10
+    );
+
+    // 5) Ouverture légère pour retirer les grains
+    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(1, 1));
+    const opened = W(new cv.Mat());
+    cv.morphologyEx(bw, opened, cv.MORPH_OPEN, kernel);
+
+    // 6) Lignes fines -> épaissir très légèrement (fermeture)
+    const kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2));
+    const closed = W(new cv.Mat());
+    cv.morphologyEx(opened, closed, cv.MORPH_CLOSE, kernel2);
+
+    // 7) Option : inversion si texte blanc sur noir (rare après adaptiveThreshold)
+    // On laisse tel quel : Tesseract gère les deux.
+
+    // 8) Redressement (angle)
+    const angle = estimateSkewAngle(src);
+    const outCanvas = rotateCanvas(matToCanvas(closed), -angle);
+
+    // 9) Sharpen léger (unsharp mask) pour OCR
+    const sharpened = applyUnsharpMask(outCanvas, 0.6, 1);
+
+    return { canvas: sharpened, angle };
+  });
+
+  const matToCanvas = (mat) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = mat.cols;
+    canvas.height = mat.rows;
+    cv.imshow(canvas, mat);
+    return canvas;
+  };
+
+  const applyUnsharpMask = (canvas, amount = 0.6, radius = 1) => {
+    // Unsharp mask bricolé via 2D context (léger)
+    // amount: 0..1
+    const w = canvas.width;
+    const h = canvas.height;
+    const ctx = canvas.getContext('2d');
+    const srcData = ctx.getImageData(0, 0, w, h);
+    const blurred = blurImageData(srcData, w, h, radius);
+    const out = ctx.createImageData(w, h);
+    for (let i = 0; i < srcData.data.length; i += 4) {
+      out.data[i] = clamp(srcData.data[i] + amount * (srcData.data[i] - blurred.data[i]));
+      out.data[i + 1] = clamp(srcData.data[i + 1] + amount * (srcData.data[i + 1] - blurred.data[i + 1]));
+      out.data[i + 2] = clamp(srcData.data[i + 2] + amount * (srcData.data[i + 2] - blurred.data[i + 2]));
+      out.data[i + 3] = srcData.data[i + 3];
+    }
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = w;
+    outCanvas.height = h;
+    outCanvas.getContext('2d').putImageData(out, 0, 0);
+    return outCanvas;
+  };
+
+  const blurImageData = (imgData, w, h, r) => {
+    // box blur très léger (r petit)
+    const out = new ImageData(w, h);
+    const src = imgData.data;
+    const dst = out.data;
+    const wh = w * h;
+    const weights = [];
+    const rs = Math.max(1, r | 0);
+    const size = rs * 2 + 1;
+    for (let i = -rs; i <= rs; i++) weights.push(1);
+    const sum = size;
+
+    const tmp = new Uint8ClampedArray(src.length);
+
+    // horizontal
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let rSum = 0, gSum = 0, bSum = 0, aSum = 0;
+        for (let k = -rs; k <= rs; k++) {
+          const xx = Math.min(w - 1, Math.max(0, x + k));
+          const idx = (y * w + xx) * 4;
+          rSum += src[idx];
+          gSum += src[idx + 1];
+          bSum += src[idx + 2];
+          aSum += src[idx + 3];
+        }
+        const o = (y * w + x) * 4;
+        tmp[o] = rSum / sum;
+        tmp[o + 1] = gSum / sum;
+        tmp[o + 2] = bSum / sum;
+        tmp[o + 3] = aSum / sum;
+      }
+    }
+
+    // vertical
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < h; y++) {
+        let rSum = 0, gSum = 0, bSum = 0, aSum = 0;
+        for (let k = -rs; k <= rs; k++) {
+          const yy = Math.min(h - 1, Math.max(0, y + k));
+          const idx = (yy * w + x) * 4;
+          rSum += tmp[idx];
+          gSum += tmp[idx + 1];
+          bSum += tmp[idx + 2];
+          aSum += tmp[idx + 3];
+        }
+        const o = (y * w + x) * 4;
+        dst[o] = rSum / sum;
+        dst[o + 1] = gSum / sum;
+        dst[o + 2] = bSum / sum;
+        dst[o + 3] = aSum / sum;
+      }
+    }
+
+    return out;
+  };
+
+  const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+
+  /*** --------------------------- OCR + Parsing ---------------------------- ***/
+
+  const normalizeOCRText = (s) => {
+    if (!s) return '';
+    // Normalisations usuelles des OCR tickets
+    return s
+      .replace(/\u00A0/g, ' ')
+      .replace(/[|]/g, ' ')
+      .replace(/[€\u20AC]/g, ' € ')
+      .replace(/[\t]+/g, ' ')
+      .replace(/ +/g, ' ')
+      .replace(/\s+\n/g, '\n')
+      .replace(/\n{2,}/g, '\n')
+      .trim();
+  };
+
+  const monthNamesFr = [
+    'janv', 'févr', 'fevr', 'mars', 'avr', 'mai', 'juin',
+    'juil', 'août', 'aout', 'sept', 'oct', 'nov', 'déc', 'dec'
+  ];
+
+  const dateRegexes = [
+    // 12/07/2025, 12-07-25, 12.07.2025
+    /\b([0-3]?\d)[\/\-.]([01]?\d)[\/\-.]((?:20)?\d{2})\b/gi,
+    // 2025-07-12
+    /\b(20\d{2})[\/\-.]([01]?\d)[\/\-.]([0-3]?\d)\b/gi,
+    // 12 juil 2025 / 12 juillet 2025
+    new RegExp(
+      `\\b([0-3]?\\d)\\s*(?:${monthNamesFr.join('|')})(?:[a-zéû]+)?\\s*(20\\d{2})\\b`,
+      'gi'
+    ),
+  ];
+
+  const toISODateSafe = (d, m, y) => {
+    // d,m,y as strings/numbers — handle yy
+    const year = String(y).length === 2 ? Number('20' + y) : Number(y);
+    const month = Number(m);
+    const day = Number(d);
+    if (
+      year >= 2000 && year <= 2100 &&
+      month >= 1 && month <= 12 &&
+      day >= 1 && day <= 31
+    ) {
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${year}-${pad(month)}-${pad(day)}`;
+    }
+    return null;
+  };
+
+  const extractDate = (text) => {
+    const lines = text.split('\n');
+
+    // Try all regexes line by line; first valid wins
+    for (const line of lines) {
+      for (const rx of dateRegexes) {
+        rx.lastIndex = 0;
+        const m = rx.exec(line.toLowerCase());
+        if (!m) continue;
+
+        // Determine pattern type by capturing groups count/meaning
+        if (rx === dateRegexes[0]) {
+          // dd sep mm sep yyyy|yy
+          const iso = toISODateSafe(m[1], m[2], m[3]);
+          if (iso) return iso;
+        } else if (rx === dateRegexes[1]) {
+          // yyyy sep mm sep dd
+          const iso = toISODateSafe(m[3], m[2], m[1]);
+          if (iso) return iso;
+        } else {
+          // 12 juil 2025
+          const day = m[1];
+          const year = m[2];
+          // Rough month detection
+          const l = line.toLowerCase();
+          let month = null;
+          const candidates = [
+            ['janv', 1], ['févr', 2], ['fevr', 2], ['mars', 3], ['avr', 4],
+            ['mai', 5], ['juin', 6], ['juil', 7], ['août', 8], ['aout', 8],
+            ['sept', 9], ['oct', 10], ['nov', 11], ['déc', 12], ['dec', 12],
+          ];
+          for (const [name, num] of candidates) {
+            if (l.includes(name)) { month = num; break; }
+          }
+          if (month) {
+            const iso = toISODateSafe(day, month, year);
+            if (iso) return iso;
+          }
+        }
+      }
+    }
+    return null;
+  };
+
+  const STOP_WORDS = [
+    'total', 'tota1', 'ttc', 'tcc', 'ht', 'tva', 'taxe', 'tax', 'remise',
+    'promotion', 'promo', 'sous total', 'sous-total', 'subtotal',
+    'net a payer', 'net à payer', 'a regler', 'à regler', 'à régler', 'a régler',
+    'rendu', 'monnaie', 'paiement', 'payment', 'cash', 'cb', 'carte',
+    'visa', 'mastercard', 'amex', 'ticket', 'merci', 'bonjour', 'au revoir',
+    'tel', 'tél', 'telephone', 'téléphone', 'siret', 'sas', 'sarl',
+    'facture', 'reçu', 'recu', 'servi', 'serveur', 'vendeur', 'magasin',
+    'n°', 'no', 'numéro', 'numero', 'ref', 'réf', 'ref.',
+  ];
+
+  const looksLikeMeta = (line) => {
+    const l = line.toLowerCase().trim();
+    if (!l || l.length < 2) return true;
+    if (/^[\W_]+$/.test(l)) return true; // only punctuation
+    if (/^\d{1,4}$/.test(l)) return true; // lone numbers
+    if (STOP_WORDS.some((w) => l.includes(w))) return true;
+    return false;
+  };
+
+  const euroToFloat = (s) => {
+    if (!s) return null;
+    const safe = s
+      .replace(/[Oo]/g, '0')    // OCR confusions
+      .replace(/[Il]/g, '1')
+      .replace(/\s/g, '')
+      .replace('€', '')
+      .replace(/,/g, '.');
+    const m = safe.match(/(\d+(?:\.\d{2})?)/);
+    return m ? parseFloat(m[1]) : null;
+  };
+
+  const findPriceInLine = (line) => {
+    // Cherche prix au format EU : 12,34 ou 12.34 (avec/ sans €)
+    const rx = /(\d{1,5}[.,]\d{2})\s*(?:€|eur|e)?\b/i;
+    const m = line.match(rx);
+    if (!m) return null;
+
+    const priceStr = m[1];
+    const price = euroToFloat(priceStr);
+    if (price == null) return null;
+
+    const left = line.slice(0, m.index).trim();
+    const right = line.slice(m.index + m[0].length).trim();
+
+    // Détecte un éventuel "2 x 3,50" (quand présent)
+    const qtyRx = /(\d{1,3})\s*[x×*]\s*(\d{1,4}[.,]\d{2})/i;
+    const q = line.match(qtyRx);
+    if (q) {
+      const qty = parseInt(q[1], 10);
+      const unit = euroToFloat(q[2]);
+      return {
+        price, // prix total sur la ligne (souvent total = qty * unit)
+        qty: isFinite(qty) && qty > 0 ? qty : 1,
+        unitPrice: unit ?? null,
+        desc: (left || right || line).replace(qtyRx, '').replace(rx, '').trim(),
+      };
+    }
+
+    return {
+      price,
+      qty: 1,
+      unitPrice: null,
+      desc: (left || right || line).replace(rx, '').trim(),
+    };
+  };
+
+  const mergeSplitLines = (lines) => {
+    // Certains tickets ont "INTITULÉ" sur une ligne, le prix à droite sur la ligne suivante
+    // Heuristique simple : si ligne[i] = texte sans prix && ligne[i+1] = uniquement prix,
+    // alors fusionner.
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      const a = lines[i].trim();
+      if (!a) continue;
+      const priceOnly = a.match(/^\s*(\d{1,5}[.,]\d{2})\s*(€|eur|e)?\s*$/i);
+
+      if (!findPriceInLine(a) && !priceOnly && i + 1 < lines.length) {
+        const b = lines[i + 1].trim();
+        const p = findPriceInLine(b) || (b.match(/^\s*(\d{1,5}[.,]\d{2})\s*(€|eur|e)?\s*$/i) ? { price: euroToFloat(b) } : null);
+        if (p) {
+          out.push(`${a}  ${b}`);
+          i++; // skip next
+          continue;
+        }
+      }
+      out.push(a);
+    }
+    return out;
+  };
+
+  const extractTotals = (lines) => {
+    let totalTTC = null;
+    let totalHT = null;
+
+    const lineHasPrice = (s) => {
+      const m = s.match(/(\d{1,5}[.,]\d{2})\s*(€|eur|e)?\b/i);
+      return m ? euroToFloat(m[1]) : null;
+    };
+
+    for (const raw of lines) {
+      const l = raw.toLowerCase();
+
+      if (/(total\s*ttc|ttc\s*total|montant\s*ttc|net\s*(?:a|à)\s*payer)/i.test(l)) {
+        const p = lineHasPrice(raw);
+        if (p != null) totalTTC = p;
+        continue;
+      }
+      if (/(total\s*ht|ht\s*total)/i.test(l)) {
+        const p = lineHasPrice(raw);
+        if (p != null) totalHT = p;
+        continue;
+      }
+    }
+
+    // fallback : dernier "total" ou dernière ligne avec prix élevé
+    if (totalTTC == null) {
+      const totals = lines
+        .filter((x) => /total/i.test(x))
+        .map((x) => ({ line: x, price: (x.match(/(\d{1,5}[.,]\d{2})/) || [])[1] }))
+        .filter((o) => o.price)
+        .map((o) => euroToFloat(o.price));
+      if (totals.length) totalTTC = totals[totals.length - 1];
+    }
+
+    if (totalTTC == null) {
+      const withPrices = lines
+        .map((x) => (x.match(/(\d{1,5}[.,]\d{2})/) || [])[1])
+        .filter(Boolean)
+        .map(euroToFloat);
+      if (withPrices.length) totalTTC = withPrices[withPrices.length - 1];
+    }
+
+    return { totalTTC, totalHT };
+  };
+
+  const extractItems = (text) => {
+    const rawLines = text
+      .split('\n')
+      .map((x) => x.replace(/[*•·▪︎◦]/g, ' ').replace(/\s{2,}/g, ' ').trim())
+      .filter(Boolean);
+
+    const lines = mergeSplitLines(rawLines);
+
+    const items = [];
+    for (const line of lines) {
+      if (looksLikeMeta(line)) continue;
+      const parsed = findPriceInLine(line);
+      if (!parsed) continue;
+
+      // Filtre "TOTAL" & co même s'il y a un prix
+      if (looksLikeMeta(parsed.desc)) continue;
+
+      // Nettoyage intitulé
+      const desc = parsed.desc
+        .replace(/\b(qte|qté|qty)\s*:\s*\d+/i, '')
+        .replace(/\b(ref|réf|code)\s*[:\-\w]*/i, '')
+        .replace(/[^\p{L}\p{N}\s'.\-]/gu, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+      items.push({
+        description: desc || 'Article',
+        quantity: parsed.qty || 1,
+        unitPrice: parsed.unitPrice != null ? Number(parsed.unitPrice.toFixed(2)) : null,
+        linePrice: Number(parsed.price.toFixed(2)),
+        raw: line,
       });
     }
 
-    setStatus(`Enregistré ✔ (ligne ${row}, ${who}, onglet « ${sheetName} »)`);
-    enableSave(false);
-  } catch(e){
-    console.error(e);
-    setStatus('Erreur : ' + (e.message || e));
-  }
-}
+    // Regrouper les doublons évidents (même description + même linePrice & unitPrice)
+    const merged = [];
+    for (const it of items) {
+      const idx = merged.findIndex(
+        (x) =>
+          x.description === it.description &&
+          (x.unitPrice === it.unitPrice || (x.unitPrice == null && it.unitPrice == null)) &&
+          x.linePrice === it.linePrice
+      );
+      if (idx >= 0) {
+        merged[idx].quantity += it.quantity;
+      } else {
+        merged.push({ ...it });
+      }
+    }
 
-async function findNextEmptyRow(sheetName, colLetter, startRow=11){
-  const endRow = startRow + 1000;
-  const range = `${sheetName}!${colLetter}${startRow}:${colLetter}${endRow}`;
-  const resp = await gapi.client.sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range });
-  const values = resp.result.values || [];
-  for (let i=0;i<values.length;i++){
-    const v = (values[i][0] || '').toString().trim();
-    if (!v) return startRow + i;
-  }
-  return startRow + values.length;
-}
+    return merged;
+  };
 
-/* =======================
-   A1 → GridRange (avec sheetId)
-======================= */
-function gridRangeFromA1(sheetId, a1){
-  const m = a1.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i);
-  if (!m) throw new Error('A1 invalide: ' + a1);
-  const c1 = colToIndex(m[1]), r1 = +m[2]-1;
-  const c2 = colToIndex(m[3]) + 1, r2 = +m[4];
-  return { sheetId, startRowIndex:r1, endRowIndex:r2, startColumnIndex:c1, endColumnIndex:c2 };
-}
-function colToIndex(col){
-  let x=0; for (let i=0;i<col.length;i++){ x = x*26 + (col.charCodeAt(i)-64); }
-  return x-1;
-}
+  const runOCR = async (canvas) => {
+    const { data } = await Tesseract.recognize(canvas, 'fra+eng', {
+      // tips: psm 6 = Assume a single uniform block of text (best for receipts)
+      tessedit_pageseg_mode: '6',
+      preserve_interword_spaces: '1',
+    });
+    return normalizeOCRText(data.text || '');
+  };
+
+  /*** --------------------------- Orchestration ---------------------------- ***/
+
+  const processImage = async (imgEl, ui) => {
+    ui.setStatus('Prétraitement de l’image…');
+    const baseCanvas = drawImageFit(imgEl, 1800, 1800);
+    const { canvas: preprocessed, angle } = preprocessForOCR(baseCanvas);
+
+    // Preview
+    ui.setPreview(preprocessed);
+
+    ui.setStatus(`OCR en cours… (angle corrigé: ${angle.toFixed(2)}°)`);
+    const text = await runOCR(preprocessed);
+
+    ui.setStatus('Extraction des données…');
+
+    const date = extractDate(text);
+    const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+    const { totalTTC, totalHT } = extractTotals(lines);
+    const items = extractItems(text);
+
+    // Calcul total (fallback si pas de total détecté)
+    const itemsSum = Number(
+      items.reduce((acc, it) => acc + (it.linePrice || 0), 0).toFixed(2)
+    );
+    const finalTotal = totalTTC != null ? totalTTC : (itemsSum > 0 ? itemsSum : null);
+
+    const result = {
+      date: date || null,
+      currency: 'EUR',
+      totalHT: totalHT != null ? Number(totalHT.toFixed(2)) : null,
+      totalTTC: finalTotal != null ? Number(finalTotal.toFixed(2)) : null,
+      items,
+      ocrText: text,
+    };
+
+    ui.showResult(result);
+    ui.setStatus('Terminé.');
+    return result;
+  };
+
+  /*** --------------------------- Minimal UI layer ------------------------- ***/
+
+  const buildFallbackUI = () => {
+    const container = createEl('div', { id: 'receipt-app', style: 'max-width:980px;margin:20px auto;font-family:system-ui,Segoe UI,Arial,sans-serif;' }, document.body);
+    createEl('h2', { text: 'Scanner de tickets' }, container);
+
+    const row = createEl('div', { style: 'display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;' }, container);
+
+    const left = createEl('div', { style: 'flex:1;min-width:260px;' }, row);
+    const right = createEl('div', { style: 'flex:1;min-width:260px;' }, row);
+
+    const file = createEl('input', { type: 'file', accept: 'image/*', id: 'receipt-file' }, left);
+    const status = createEl('div', { id: 'status', style: 'margin-top:8px;color:#555;' }, left);
+    const canvas = createEl('canvas', { id: 'preview', style: 'width:100%;max-width:480px;border:1px solid #ddd;border-radius:8px;background:#fff;' }, left);
+
+    const results = createEl('div', { id: 'results', style: 'font-size:14px;line-height:1.4' }, right);
+    results.innerHTML = `
+      <div style="margin-bottom:8px;">
+        <strong>Date :</strong> <span id="out-date">-</span><br/>
+        <strong>Total TTC :</strong> <span id="out-total">-</span>
+      </div>
+      <div style="max-height:260px;overflow:auto;border:1px solid #eee;border-radius:8px;padding:8px;background:#fafafa;margin-bottom:8px;">
+        <table id="items-table" style="width:100%;border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="text-align:left;border-bottom:1px solid #ddd;padding:6px;">Intitulé</th>
+              <th style="text-align:right;border-bottom:1px solid #ddd;padding:6px;">Qté</th>
+              <th style="text-align:right;border-bottom:1px solid #ddd;padding:6px;">Prix ligne (€)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <details>
+        <summary>JSON</summary>
+        <pre id="json" style="white-space:pre-wrap;"></pre>
+      </details>
+    `;
+
+    return {
+      file,
+      canvas,
+      status: $('#status'),
+      outDate: $('#out-date'),
+      outTotal: $('#out-total'),
+      itemsTableBody: $('#items-table tbody'),
+      json: $('#json'),
+      results,
+      container,
+    };
+  };
+
+  const getOrCreateUI = () => {
+    const file = firstExisting(['#receipt-file', '#file', '[data-receipt-input]']) || null;
+    const canvas = firstExisting(['#preview', '#canvas', '[data-receipt-canvas]']) || null;
+    const results = firstExisting(['#results', '#output', '[data-receipt-output]']) || null;
+
+    if (file && canvas && results) {
+      // Expect standard sub-elements inside results
+      const outDate = $('#out-date') || createEl('span', { id: 'out-date' }, results);
+      const outTotal = $('#out-total') || createEl('span', { id: 'out-total' }, results);
+      let itemsTableBody = $('#items-table tbody');
+      if (!itemsTableBody) {
+        const table = createEl('table', { id: 'items-table', style: 'width:100%;border-collapse:collapse;' }, results);
+        table.innerHTML = `
+          <thead>
+            <tr>
+              <th style="text-align:left;border-bottom:1px solid #ddd;padding:6px;">Intitulé</th>
+              <th style="text-align:right;border-bottom:1px solid #ddd;padding:6px;">Qté</th>
+              <th style="text-align:right;border-bottom:1px solid #ddd;padding:6px;">Prix ligne (€)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>`;
+        itemsTableBody = table.querySelector('tbody');
+      }
+      const json = $('#json') || createEl('pre', { id: 'json', style: 'white-space:pre-wrap;' }, results);
+      const status = $('#status') || createEl('div', { id: 'status', style: 'margin-top:8px;color:#555;' }, results);
+
+      return { file, canvas, results, outDate, outTotal, itemsTableBody, json, status };
+    }
+
+    // Build minimal UI if missing
+    return buildFallbackUI();
+  };
+
+  const makeUIApi = (ui) => ({
+    setStatus(msg) {
+      if (ui.status) ui.status.textContent = msg;
+    },
+    setPreview(canvas) {
+      if (!ui.canvas) return;
+      const ctx = ui.canvas.getContext('2d');
+      ui.canvas.width = canvas.width;
+      ui.canvas.height = canvas.height;
+      ctx.drawImage(canvas, 0, 0);
+    },
+    showResult(result) {
+      if (ui.outDate) ui.outDate.textContent = result.date || '—';
+      if (ui.outTotal)
+        ui.outTotal.textContent = result.totalTTC != null ? result.totalTTC.toFixed(2) + ' €' : '—';
+
+      if (ui.itemsTableBody) {
+        ui.itemsTableBody.innerHTML = '';
+        for (const it of result.items) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td style="padding:6px;border-bottom:1px solid #f0f0f0;">${escapeHtml(it.description)}</td>
+            <td style="padding:6px;border-bottom:1px solid #f0f0f0;text-align:right;">${it.quantity}</td>
+            <td style="padding:6px;border-bottom:1px solid #f0f0f0;text-align:right;">${it.linePrice.toFixed(2)}</td>
+          `;
+          ui.itemsTableBody.appendChild(tr);
+        }
+      }
+
+      if (ui.json) ui.json.textContent = JSON.stringify(result, null, 2);
+      console.log('[Receipt OCR]', result);
+    },
+  });
+
+  const escapeHtml = (s) =>
+    s.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+
+  /*** ------------------------------- Init -------------------------------- ***/
+
+  const onFileChange = async (fileInput, uiApi) => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+
+    const img = new Image();
+    img.onload = async () => {
+      try {
+        await ensureDeps();
+        await processImage(img, uiApi);
+      } catch (err) {
+        console.error(err);
+        uiApi.setStatus('Erreur : ' + (err && err.message ? err.message : String(err)));
+      }
+    };
+    img.onerror = () => uiApi.setStatus('Impossible de lire l’image.');
+    img.src = URL.createObjectURL(file);
+  };
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    const ui = getOrCreateUI();
+    const uiApi = makeUIApi(ui);
+
+    if (ui.file) {
+      ui.file.addEventListener('change', () => onFileChange(ui.file, uiApi));
+    }
+
+    // Optionnel : si un <img id="sample"> existe déjà dans la page, on le traite
+    const sample = $('#receipt-sample');
+    if (sample && sample.complete && sample.naturalWidth > 0) {
+      try {
+        await ensureDeps();
+        uiApi.setStatus('Analyse de l’exemple…');
+        await processImage(sample, uiApi);
+      } catch (e) {
+        console.error(e);
+        uiApi.setStatus('Erreur : ' + (e && e.message ? e.message : String(e)));
+      }
+    }
+  });
+})();
