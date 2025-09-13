@@ -4,7 +4,7 @@
 const ALLOWED_EMAILS = ['polmickael3@gmail.com','sabrinamedjoub@gmail.com'].map(e=>e.toLowerCase());
 const SCRIPT_ID = '1dkuTGVPxWwq5Ib6EK2iLsJt9HjjH1ll1iMbMB8-ebSEUiUsLmsNqNCGh';   // (non utilisé côté front)
 const CLIENT_ID = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';   // OAuth Web client
-const API_KEY         = 'VOTRE_API_KEY'; // optionnel, utile pour discovery si dispo
+const API_KEY         = 'VOTRE_API_KEY'; // optionnel
 const SPREADSHEET_ID  = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI';
 const DEFAULT_SHEET   = 'Août 2025';
 const OCR_LANG        = 'eng+fra+spa+cat'; // FR/EN/ES/CAT
@@ -20,8 +20,8 @@ let currentUserEmail = null;
 let sheetNameToId = {};
 
 const $ = s => document.querySelector(s);
-const setStatus  = msg => { $('#status').textContent = msg; };
-const enableSave = on  => { $('#btnSave').disabled = !on; };
+const setStatus  = msg => { const el=$('#status'); if (el) el.textContent = msg; console.log('[Scan]', msg); };
+const enableSave = on  => { const b=$('#btnSave'); if (b) b.disabled = !on; };
 
 /* =======================
    BOOT
@@ -55,23 +55,34 @@ function bindUI(){
       setStatus('Échec connexion');
     }
   });
+
+  // UX: normalise le total au blur (12,3 -> 12,30)
+  const total = $('#total');
+  if (total) total.addEventListener('blur', () => {
+    if (!total.value) return;
+    const n = parseEuroToNumber(total.value);
+    if (n != null) total.value = n.toFixed(2).replace('.', ',');
+  });
 }
 
 function bindChips(containerId, inputId){
   const box = document.getElementById(containerId);
+  if (!box) return;
   box.addEventListener('click', (e) => {
     const chip = e.target.closest('.chip');
     if (!chip) return;
     const val = chip.getAttribute('data-v');
-    if (inputId === 'date') setDateInputFromDDMM(val);
+    if (inputId === 'date') setDateInputSmart(val);
+    else if (inputId === 'total') $('#total').value = toFrMoney(val);
     else document.getElementById(inputId).value = val;
+    validateCanSave();
   });
 }
 
 function resetForm(){
-  $('#file').value=''; $('#preview').src='';
-  ['merchant','date','total'].forEach(id=>$('#'+id).value='');
-  ['merchantCandidates','dateCandidates','totalCandidates'].forEach(id=>$('#'+id).innerHTML='');
+  const p = $('#preview'); if (p) p.src='';
+  ['merchant','date','total'].forEach(id=>{ const el=$('#'+id); if (el) el.value=''; });
+  ['merchantCandidates','dateCandidates','totalCandidates'].forEach(id=>{ const el=$('#'+id); if (el) el.innerHTML=''; });
   enableSave(false); setStatus('Prêt.');
 }
 
@@ -92,17 +103,32 @@ function ddmmyyyyToISO(s){
   if (d<1||d>31||mo<1||mo>12) return '';
   return `${y}-${pad2(mo)}-${pad2(d)}`;
 }
+function yyyymmddToISO(s){
+  const m = String(s||'').match(/^(20\d{2})[\/.\-]([01]?\d)[\/.\-]([0-3]?\d)$/);
+  if(!m) return '';
+  return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
+}
+function setDateInputFromDDMM(str){
+  const iso = ddmmyyyyToISO(str);
+  const el = $('#date'); if (el) el.value = iso || '';
+}
+function setDateInputSmart(str){
+  const iso = ddmmyyyyToISO(str) || yyyymmddToISO(str);
+  const el = $('#date'); if (el) el.value = iso || '';
+}
 function isoToDDMMYYYY(iso){
   const m = String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if(!m) return '';
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
-function setDateInputFromDDMM(str){
-  const iso = ddmmyyyyToISO(str);
-  $('#date').value = iso || '';
-}
 function getDateFromInput(){
   return isoToDDMMYYYY($('#date').value);
+}
+function validateCanSave(){
+  const label = ($('#merchant').value||'').trim();
+  const dateOk = !!$('#date').value;
+  const totalOk = parseEuroToNumber($('#total').value) != null;
+  enableSave(!!label && dateOk && totalOk && !!($('#sheetSelect').value));
 }
 
 /* =======================
@@ -187,17 +213,25 @@ async function updateAuthUI(){
 async function listSheets(){
   if (!accessToken) return;
   try {
+    // On récupère "index" pour sélectionner le dernier onglet créé par défaut
     const resp = await gapi.client.sheets.spreadsheets.get({
       spreadsheetId: SPREADSHEET_ID,
-      fields: 'sheets(properties(sheetId,title))'
+      fields: 'sheets(properties(sheetId,title,index))'
     });
     const props = (resp.result.sheets||[]).map(s=>s.properties);
+
     sheetNameToId = {};
     const sel = $('#sheetSelect');
-    sel.innerHTML = props.map(p => {
-      sheetNameToId[p.title] = p.sheetId;
-      return `<option ${p.title===DEFAULT_SHEET?'selected':''}>${p.title}</option>`;
-    }).join('');
+    sel.innerHTML = props
+      .sort((a,b)=>a.index-b.index) // tri par index
+      .map(p => {
+        sheetNameToId[p.title] = p.sheetId;
+        return `<option>${p.title}</option>`;
+      }).join('');
+
+    // Pré-sélection : DEFAULT_SHEET si présent, sinon le dernier (index max)
+    let preselect = props.find(p => p.title === DEFAULT_SHEET) || props.at(-1);
+    if (preselect) sel.value = preselect.title;
   } catch(e){
     console.warn('listSheets:', e);
   }
@@ -214,104 +248,103 @@ function waitFor(test, every=100, timeout=10000){
 }
 
 /* =======================
-   IMAGE → PREPROC → OCR (multipasse)
+   SCAN (jscanify) → PREPROC (OpenCV) → OCR
 ======================= */
 async function handleImageChange(e){
   const file = e.target.files?.[0];
   if (!file) return;
-  setStatus('Préparation de l’image…');
+  enableSave(false);
+  setStatus('Chargement de la photo…');
 
-  const rawB64 = await fileToBase64(file);
-  const b64 = await enhanceForOCR(rawB64).catch(()=>rawB64);
-  $('#preview').src = 'data:image/jpeg;base64,' + b64;
+  // 0) Lire l’image dans un <img>
+  const img = await fileToImage(file);
 
-  setStatus('Analyse (OCR)…');
-  const ocr = await runOCR(b64);  // { fullText, topText, bottomText }
+  // 1) jscanify : détection du document + redressement (canvas)
+  setStatus('Détection et redressement…');
+  let scannedCanvas;
+  try {
+    const baseCanvas = drawImageFit(img, 2000);
+    const scanner = new jscanify();
+    scannedCanvas = scanner.scan(baseCanvas); // canvas recadré/perspective corrigée
+  } catch (err) {
+    console.warn('jscanify failed, fallback original:', err);
+    scannedCanvas = drawImageFit(img, 2000);
+  }
 
-  const parsed = parseReceipt(ocr);
-  applyCandidates(parsed);
-  setStatus('Vérifie / ajuste puis “Enregistrer”.');
-  enableSave(true);
-}
-
-function fileToBase64(file){
-  return new Promise((res,rej)=>{
-    const r = new FileReader();
-    r.onload = ()=>res(r.result.split(',')[1]);
-    r.onerror = rej;
-    r.readAsDataURL(file);
+  // 2) OpenCV : amélioration pour OCR (binarisation adaptative)
+  setStatus('Prétraitement (OpenCV)…');
+  const ocrCanvas = await enhanceForOCR_Canvas(scannedCanvas).catch(()=>{
+    // fallback si OpenCV indispo
+    return scannedCanvas;
   });
-}
 
-/* ===== Prétraitement OpenCV (robuste, sans fastNlMeansDenoising) ===== */
-async function enhanceForOCR(base64){
-  if (!window._opencvReady || !window.cv) return base64;
+  // Preview
+  const preview = $('#preview');
+  if (preview) preview.src = ocrCanvas.toDataURL('image/jpeg', 0.95);
 
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      try {
-        const srcC = document.createElement('canvas');
-        const sctx = srcC.getContext('2d', { willReadFrequently: true });
-        srcC.width = img.width; srcC.height = img.height;
-        sctx.drawImage(img, 0, 0);
-
-        let src = cv.imread(srcC);
-
-        // 1) Gris + débruitage compatible : medianBlur + léger Gaussian
-        let gray = new cv.Mat();
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-        cv.medianBlur(gray, gray, 3);
-        cv.GaussianBlur(gray, gray, new cv.Size(3,3), 0, 0, cv.BORDER_DEFAULT);
-
-        // 2) Bords + plus grand contour → crop
-        let edges = new cv.Mat();
-        cv.Canny(gray, edges, 50, 150);
-        let contours = new cv.MatVector();
-        let hierarchy = new cv.Mat();
-        cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-        let maxArea = 0, bestRect = null;
-        for (let i = 0; i < contours.size(); i++) {
-          const r = cv.boundingRect(contours.get(i));
-          const area = r.width * r.height;
-          if (area > maxArea) { maxArea = area; bestRect = r; }
-        }
-        if (bestRect && maxArea > src.rows*src.cols*0.2) {
-          src = src.roi(bestRect).clone();
-        }
-
-        // 3) Re-contraste + binarisation adaptative
-        let g2 = new cv.Mat(); cv.cvtColor(src, g2, cv.COLOR_RGBA2GRAY, 0);
-        let eq = new cv.Mat(); cv.equalizeHist(g2, eq);
-        let bw = new cv.Mat();
-        cv.adaptiveThreshold(eq, bw, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 35, 15);
-
-        // Inversion si fond sombre
-        const mean = cv.mean(bw)[0];
-        if (mean < 127) cv.bitwise_not(bw, bw);
-
-        const outC = document.createElement('canvas');
-        outC.width = bw.cols; outC.height = bw.rows;
-        cv.imshow(outC, bw);
-        const out = outC.toDataURL('image/jpeg', 0.95).split(',')[1];
-
-        [src, gray, edges, contours, hierarchy, g2, eq, bw].forEach(m => { if(m && m.delete) m.delete(); });
-        resolve(out);
-      } catch (err) {
-        console.warn('OpenCV enhance error, fallback raw:', err);
-        resolve(base64);
-      }
-    };
-    img.src = 'data:image/jpeg;base64,' + base64;
-  });
-}
-
-/* ===== OCR multipasse : plein + bandes haut/bas ===== */
-async function runOCR(base64){
+  // 3) OCR (Tesseract, multipasse)
+  setStatus('Lecture OCR…');
+  const base64 = ocrCanvas.toDataURL('image/jpeg', 0.95).split(',')[1];
   const { fullText, topText, bottomText } = await runOCRMulti(base64);
-  return { fullText, topText, bottomText };
+
+  // 4) Parsing (marchand, date, total) + suggestions
+  setStatus('Extraction des données…');
+  const parsed = parseReceipt({ fullText, topText, bottomText });
+  applyCandidates(parsed);
+
+  // Déverrouille si on a tout
+  validateCanSave();
+  setStatus('Vérifie / ajuste puis “Enregistrer”.');
 }
+
+function drawImageFit(img, max = 2000){
+  const r = Math.min(max / img.naturalWidth, max / img.naturalHeight, 1);
+  const w = Math.round(img.naturalWidth * r);
+  const h = Math.round(img.naturalHeight * r);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(img, 0, 0, w, h);
+  return c;
+}
+
+function fileToImage(file){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/* ===== OpenCV : binarisation adaptative sur canvas ===== */
+async function enhanceForOCR_Canvas(inCanvas){
+  if (!window._opencvReady || !window.cv) return inCanvas;
+
+  // gray -> equalize -> adaptiveThreshold -> invert si besoin
+  const src = cv.imread(inCanvas);
+  const gray = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+
+  const eq = new cv.Mat();
+  cv.equalizeHist(gray, eq);
+
+  const bw = new cv.Mat();
+  cv.adaptiveThreshold(eq, bw, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 35, 15);
+
+  // Inversion si majoritairement sombre
+  const mean = cv.mean(bw)[0];
+  if (mean < 127) cv.bitwise_not(bw, bw);
+
+  const out = document.createElement('canvas');
+  out.width = bw.cols; out.height = bw.rows;
+  cv.imshow(out, bw);
+
+  [src, gray, eq, bw].forEach(m => { try { m.delete(); } catch(_){} });
+
+  return out;
+}
+
+/* ===== OCR multipasse : plein + bande haute + bande basse ===== */
 async function runOCRMulti(base64){
   const fullText = await tesseractRecognize(base64);
   const [topB64, bottomB64] = await cutBands(base64, 0.00, 0.25, 0.65, 1.00);
@@ -358,7 +391,7 @@ function parseReceipt(ocr){
   let merchCand = takeMerchantCandidates(top);
   if (merchCand.length < 5) merchCand = unique([...merchCand, ...takeMerchantCandidates(full)]);
 
-  // DATES
+  // DATES (support DD/MM/YYYY, YYYY-MM-DD, mois FR en lettres si présents dans OCR global)
   const dateCand = unique([
     ...fromDateKeywords(whole),
     ...strictDateRegex(whole)
@@ -399,13 +432,30 @@ function takeMerchantCandidates(linesArr){
 }
 
 function fromDateKeywords(text){
-  const rx = /(?:DATE|FECHA|DATA|D\.|FEC\.?)\s*[:\-]?\s*([0-3]?\d[\/\.\-][01]?\d[\/\.\-]\d{2,4})/ig;
+  // capte "DATE: 12/07/2025", "FECHA 12-07-25", etc.
+  const rx = /(?:DATE|FECHA|DATA|D\.|FEC\.?)\s*[:\-]?\s*([0-3]?\d[\/\.\-][01]?\d[\/\.\-]\d{2,4}|20\d{2}[\/\.\-][01]?\d[\/\.\-][0-3]?\d)/ig;
   const out = []; let m; while((m = rx.exec(text))) out.push(m[1]); return out;
 }
 function strictDateRegex(text){
-  const rx = /\b([0-3]?\d[\/\.\-][01]?\d[\/\.\-]\d{2,4})\b/g;
+  // toutes dates plausibles autonomes
+  const rx = /\b([0-3]?\d[\/\.\-][01]?\d[\/\.\-]\d{2,4}|20\d{2}[\/\.\-][01]?\d[\/\.\-][0-3]?\d)\b/g;
   const out = []; let m; while((m = rx.exec(text))) out.push(m[1]); return out;
 }
+function normalizeDate(s){
+  // retourne "DD/MM/YYYY" ou "" si invalide
+  const a = String(s||'').trim();
+  let m = a.match(/^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{2,4})$/);
+  if (m) {
+    let d=+m[1], mo=+m[2], y=+m[3]; if (y<100) y+=2000;
+    if (d>=1&&d<=31&&mo>=1&&mo<=12) return `${pad2(d)}/${pad2(mo)}/${y}`;
+  }
+  m = a.match(/^(20\d{2})[\/\.\-]([01]?\d)[\/\.\-]([0-3]?\d)$/);
+  if (m) {
+    return `${pad2(+m[3])}/${pad2(+m[2])}/${m[1]}`;
+  }
+  return '';
+}
+
 function fromTotalKeywords(text){
   const keys = [
     /TOTAL\s*TT?C?/i, /TOTAL\s+À\s+PAYER/i, /NET\s+À\s+PAYER/i, /TOTAL\s+CB/i,
@@ -428,21 +478,26 @@ function plausibleAmounts(linesOrText){
     while((m = rx1.exec(L))) out.push(m[1]);
     while((m = rx2.exec(L))) out.push(m[1]);
   }
-  return unique(out).map(r => ({r, v: parseFloat(r.replace(/\s/g,'').replace(',','.'))}))
+  return unique(out).map(r => ({r, v: parseFloat(r.replace(/\s/g,'').replace(',', '.'))}))
                     .filter(x => Number.isFinite(x.v) && x.v >= 0.2 && x.v <= 20000)
                     .sort((a,b)=>b.v-a.v)
                     .map(x => x.r);
 }
 
 function applyCandidates(c){
+  // Merchant
   $('#merchant').value = c.merchants[0] || '';
   $('#merchantCandidates').innerHTML = chipsHTML(c.merchants);
 
-  setDateInputFromDDMM(c.dates[0] || '');
+  // Date
+  if (c.dates[0]) setDateInputSmart(c.dates[0]);
   $('#dateCandidates').innerHTML = chipsHTML(c.dates);
 
+  // Total
   $('#total').value = toFrMoney(c.totals[0] || '');
   $('#totalCandidates').innerHTML = chipsHTML(c.totals.map(toFrMoney));
+
+  validateCanSave();
 }
 
 const chipsHTML = arr =>
@@ -452,23 +507,11 @@ const chipsHTML = arr =>
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, m => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#039;"
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
   }[m]));
 }
-function unique(arr){ return [...new Set(arr.map(s=>s.trim()).filter(Boolean))]; }
+function unique(arr){ return [...new Set(arr.map(s=>String(s).trim()).filter(Boolean))]; }
 function normNum(s){ return String(s).replace(/\s/g,'').replace(',', '.'); }
-
-function normalizeDate(s){
-  const m = String(s||'').match(/^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{2,4})$/);
-  if (!m) return '';
-  let [_, d, mo, y]=m; d=+d; mo=+mo; y=+y; if (y<100) y+=2000;
-  if (d<1||d>31||mo<1||mo>12) return '';
-  return `${String(d).padStart(2,'0')}/${String(mo).padStart(2,'0')}/${y}`;
-}
 function toFrMoney(s){
   if (!s) return '';
   const n = parseFloat(String(s).replace(/\s/g,'').replace(',', '.'));
@@ -494,7 +537,7 @@ async function saveToSheet(){
       : {label:'O', date:'P', total:'Q'};
 
     const label   = ($('#merchant').value || '').trim();
-    const dateStr = getDateFromInput();
+    const dateStr = getDateFromInput(); // en DD/MM/YYYY
     const totalNum = parseEuroToNumber($('#total').value);
 
     if (!label || !dateStr || totalNum == null) throw new Error('Champs incomplets');
