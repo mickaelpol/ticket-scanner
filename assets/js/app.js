@@ -56,7 +56,7 @@ function bindUI(){
     }
   });
 
-  // UX: normalise le total au blur (12,3 -> 12,30)
+  // Normalise le total au blur (12,3 -> 12,30)
   const total = $('#total');
   if (total) total.addEventListener('blur', () => {
     if (!total.value) return;
@@ -88,7 +88,7 @@ function resetForm(){
 
 function parseEuroToNumber(s){
   if (!s) return null;
-  const n = parseFloat(String(s).replace(/\s+/g,'').replace('€','').replace(',','.'));
+  const n = parseFloat(String(s).replace(/\s+/g,'').replace(/[€]/g,'').replace(',','.'));
   return Number.isFinite(n) ? n : null;
 }
 
@@ -107,10 +107,6 @@ function yyyymmddToISO(s){
   const m = String(s||'').match(/^(20\d{2})[\/.\-]([01]?\d)[\/.\-]([0-3]?\d)$/);
   if(!m) return '';
   return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
-}
-function setDateInputFromDDMM(str){
-  const iso = ddmmyyyyToISO(str);
-  const el = $('#date'); if (el) el.value = iso || '';
 }
 function setDateInputSmart(str){
   const iso = ddmmyyyyToISO(str) || yyyymmddToISO(str);
@@ -213,7 +209,7 @@ async function updateAuthUI(){
 async function listSheets(){
   if (!accessToken) return;
   try {
-    // On récupère "index" pour sélectionner le dernier onglet créé par défaut
+    // récupère 'index' pour choisir le dernier onglet si DEFAULT_SHEET absent
     const resp = await gapi.client.sheets.spreadsheets.get({
       spreadsheetId: SPREADSHEET_ID,
       fields: 'sheets(properties(sheetId,title,index))'
@@ -223,13 +219,10 @@ async function listSheets(){
     sheetNameToId = {};
     const sel = $('#sheetSelect');
     sel.innerHTML = props
-      .sort((a,b)=>a.index-b.index) // tri par index
-      .map(p => {
-        sheetNameToId[p.title] = p.sheetId;
-        return `<option>${p.title}</option>`;
-      }).join('');
+      .sort((a,b)=>a.index-b.index)
+      .map(p => { sheetNameToId[p.title]=p.sheetId; return `<option>${p.title}</option>`; })
+      .join('');
 
-    // Pré-sélection : DEFAULT_SHEET si présent, sinon le dernier (index max)
     let preselect = props.find(p => p.title === DEFAULT_SHEET) || props.at(-1);
     if (preselect) sel.value = preselect.title;
   } catch(e){
@@ -248,7 +241,7 @@ function waitFor(test, every=100, timeout=10000){
 }
 
 /* =======================
-   SCAN (jscanify) → PREPROC (OpenCV) → OCR
+   SCAN (jscanify) → PREPROC (OpenCV) → OCR rapide
 ======================= */
 async function handleImageChange(e){
   const file = e.target.files?.[0];
@@ -259,45 +252,51 @@ async function handleImageChange(e){
   // 0) Lire l’image dans un <img>
   const img = await fileToImage(file);
 
-  // 1) jscanify : détection du document + redressement (canvas)
+  // 1) jscanify : détection + redressement (canvas)
   setStatus('Détection et redressement…');
   let scannedCanvas;
   try {
-    const baseCanvas = drawImageFit(img, 2000);
+    const baseCanvas = drawImageFit(img, 1200); // ✔ plus rapide
     const scanner = new jscanify();
     scannedCanvas = scanner.scan(baseCanvas); // canvas recadré/perspective corrigée
   } catch (err) {
     console.warn('jscanify failed, fallback original:', err);
-    scannedCanvas = drawImageFit(img, 2000);
+    scannedCanvas = drawImageFit(img, 1200);
   }
 
-  // 2) OpenCV : amélioration pour OCR (binarisation adaptative)
+  // 2) OpenCV : amélioration légère pour OCR (binarisation adaptative)
   setStatus('Prétraitement (OpenCV)…');
   const ocrCanvas = await enhanceForOCR_Canvas(scannedCanvas).catch(()=>{
-    // fallback si OpenCV indispo
-    return scannedCanvas;
+    return scannedCanvas; // fallback
   });
 
   // Preview
   const preview = $('#preview');
-  if (preview) preview.src = ocrCanvas.toDataURL('image/jpeg', 0.95);
+  if (preview) preview.src = ocrCanvas.toDataURL('image/jpeg', 0.9);
 
-  // 3) OCR (Tesseract, multipasse)
-  setStatus('Lecture OCR…');
-  const base64 = ocrCanvas.toDataURL('image/jpeg', 0.95).split(',')[1];
-  const { fullText, topText, bottomText } = await runOCRMulti(base64);
+  // 3) OCR RAPIDE : seulement bande haute & bande basse
+  setStatus('Lecture OCR (rapide)…');
+  const base64 = ocrCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
+  let { topText, bottomText } = await runOCRBandsOnly(base64);
+
+  // Fallback plein si une info manque
+  const needsFull = (!topText || topText.length < 20) || (!bottomText || bottomText.length < 20);
+  let fullText = '';
+  if (needsFull) {
+    setStatus('Lecture OCR (fallback plein)…');
+    fullText = await tesseractRecognize(base64);
+  }
 
   // 4) Parsing (marchand, date, total) + suggestions
   setStatus('Extraction des données…');
   const parsed = parseReceipt({ fullText, topText, bottomText });
   applyCandidates(parsed);
 
-  // Déverrouille si on a tout
   validateCanSave();
   setStatus('Vérifie / ajuste puis “Enregistrer”.');
 }
 
-function drawImageFit(img, max = 2000){
+function drawImageFit(img, max = 1200){
   const r = Math.min(max / img.naturalWidth, max / img.naturalHeight, 1);
   const w = Math.round(img.naturalWidth * r);
   const h = Math.round(img.naturalHeight * r);
@@ -320,7 +319,6 @@ function fileToImage(file){
 async function enhanceForOCR_Canvas(inCanvas){
   if (!window._opencvReady || !window.cv) return inCanvas;
 
-  // gray -> equalize -> adaptiveThreshold -> invert si besoin
   const src = cv.imread(inCanvas);
   const gray = new cv.Mat();
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
@@ -329,9 +327,8 @@ async function enhanceForOCR_Canvas(inCanvas){
   cv.equalizeHist(gray, eq);
 
   const bw = new cv.Mat();
-  cv.adaptiveThreshold(eq, bw, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 35, 15);
+  cv.adaptiveThreshold(eq, bw, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 31, 12);
 
-  // Inversion si majoritairement sombre
   const mean = cv.mean(bw)[0];
   if (mean < 127) cv.bitwise_not(bw, bw);
 
@@ -344,18 +341,19 @@ async function enhanceForOCR_Canvas(inCanvas){
   return out;
 }
 
-/* ===== OCR multipasse : plein + bande haute + bande basse ===== */
-async function runOCRMulti(base64){
-  const fullText = await tesseractRecognize(base64);
-  const [topB64, bottomB64] = await cutBands(base64, 0.00, 0.25, 0.65, 1.00);
+/* ===== OCR bandes haute/basse ===== */
+async function runOCRBandsOnly(base64){
+  const [topB64, bottomB64] = await cutBands(base64, 0.00, 0.28, 0.62, 1.00);
   const [topText, bottomText] = await Promise.all([
     topB64 ? tesseractRecognize(topB64) : Promise.resolve(''),
     bottomB64 ? tesseractRecognize(bottomB64) : Promise.resolve('')
   ]);
-  return { fullText, topText, bottomText };
+  return { topText, bottomText };
 }
 async function tesseractRecognize(base64){
-  const { data: { text } } = await Tesseract.recognize('data:image/jpeg;base64,' + base64, OCR_LANG, { logger:()=>{} });
+  const { data: { text } } = await Tesseract.recognize('data:image/jpeg;base64,' + base64, OCR_LANG, {
+    tessedit_pageseg_mode: '6'
+  });
   return text || '';
 }
 async function cutBands(base64, topStart=0, topEnd=0.25, botStart=0.65, botEnd=1.0){
@@ -370,7 +368,7 @@ async function cutBands(base64, topStart=0, topEnd=0.25, botStart=0.65, botEnd=1
         const cy = Math.round(H*y0);
         const seg = document.createElement('canvas'); seg.width=W; seg.height=ch;
         const sctx = seg.getContext('2d'); sctx.drawImage(c, 0, cy, W, ch, 0, 0, W, ch);
-        return seg.toDataURL('image/jpeg', 0.95).split(',')[1];
+        return seg.toDataURL('image/jpeg', 0.9).split(',')[1];
       }
       resolve([cut(topStart, topEnd), cut(botStart, botEnd)]);
     };
@@ -382,108 +380,124 @@ async function cutBands(base64, topStart=0, topEnd=0.25, botStart=0.65, botEnd=1
    PARSING + SUGGESTIONS
 ======================= */
 function parseReceipt(ocr){
-  const full = (ocr.fullText || '').split(/\r?\n/).map(clean).filter(Boolean);
+  const clean = s => String(s||'').replace(/\u00A0/g,' ').replace(/\s+/g,' ').trim();
+
   const top  = (ocr.topText  || '').split(/\r?\n/).map(clean).filter(Boolean);
   const bot  = (ocr.bottomText|| '').split(/\r?\n/).map(clean).filter(Boolean);
-  const whole = [...top, ...full, ...bot].join('\n');
+  const full = (ocr.fullText  || '').split(/\r?\n/).map(clean).filter(Boolean);
 
-  // ENSEIGNE
-  let merchCand = takeMerchantCandidates(top);
-  if (merchCand.length < 5) merchCand = unique([...merchCand, ...takeMerchantCandidates(full)]);
+  // ENSEIGNE : fort au début + mots-clés connus (E.S., GASOPAS, etc.)
+  const merchants = merchantCandidates(top, full);
 
-  // DATES (support DD/MM/YYYY, YYYY-MM-DD, mois FR en lettres si présents dans OCR global)
-  const dateCand = unique([
-    ...fromDateKeywords(whole),
-    ...strictDateRegex(whole)
-  ]).map(normalizeDate).filter(Boolean).slice(0,5);
+  // DATE : “Date: 07/08/2025 11:36”, “Fecha: 07.08.25”, etc.
+  const dates = dateCandidates([...top, ...full]);
 
-  // TOTAL
-  let totalCand = fromTotalKeywords(bot.join('\n'));
-  if (totalCand.length < 5) {
-    const more = plausibleAmounts(bot).concat(plausibleAmounts(full));
-    for (const r of more) {
-      if (!totalCand.find(t => normNum(t) === normNum(r))) totalCand.push(r);
-      if (totalCand.length >= 5) break;
-    }
-  }
+  // TOTAL (depuis le bas, privilégie près de "EUR")
+  const totals = totalCandidates(bot.length ? bot : full);
 
-  return {
-    merchants: merchCand.slice(0,5),
-    dates: dateCand.slice(0,5),
-    totals: totalCand.slice(0,5)
-  };
-
-  function clean(s){ return s.replace(/\s+/g,' ').trim(); }
+  return { merchants, dates, totals };
 }
 
-function takeMerchantCandidates(linesArr){
-  const known = /(ASF|VINCI|CARREFOUR|LECLERC|E\.?LECLERC|INTERMARCHÉ|AUCHAN|LIDL|MONOPRIX|CASINO|ALDI|DECATHLON|ACTION|FNAC|DARTY|BOULANGER|PICARD|BIOCOOP|PRIMARK|ZARA|IKEA|H&M|TOTAL(?:\s?ENERGIES)?|REDSYS|GASOLINERA|GASOPAS|ES\s+GASOPAS|E\.S\.)/i;
-  const bad = /(SIRET|TVA|FACTURE|TICKET|N[°o]|NUMÉRO|CARTE|PAIEMENT|VENTE|CAISSE|CLIENT|TEL|WWW|HTTP|EMAIL|SITE\s+WEB|CIF|NRT|NIF|RCS)/i;
+/* --- Marchand --- */
+function merchantCandidates(top, full){
+  const KNOWN = /(E\.?S\.?|ESTACI[ÓO]N|GASOLINERA|GASOPAS|TOTAL(?:\s?ENERGIES)?|CARREFOUR|LECLERC|AUCHAN|LIDL|ALDI|MONOPRIX|CASINO|INTERMARCH[ÉE]|REDSYS|SHELL|BP|REPSOL)/i;
+  const BAD = /(SIRET|TVA|FACTURE|TICKET|N[°o]|NUM[ÉE]RO|CARTE|PAIEMENT|VENTE|CAISSE|CLIENT|TEL|WWW|HTTP|EMAIL|SITE\s+WEB|CIF|NRT|NIF|RCS|CONFIRMACI[ÓO]N|CONFIRMATION)/i;
   const looksAddr = /(RUE|AVENUE|AVDA|AV\.|BD|BOULEVARD|PLAZA|PLACE|CHEMIN|IMPASSE|CARRER|CP|\b\d{5}\b|ANDORRA|FRANCE|ESPAÑA|PORTUGAL)/i;
 
-  const out = [];
-  for (let i=0;i<Math.min(linesArr.length, 15); i++){
-    const L = linesArr[i];
-    if (!L || bad.test(L) || looksAddr.test(L)) continue;
-    if (known.test(L)) out.unshift(L);
-    else if (/^[A-ZÀ-ÖØ-Þ0-9\.\- ']{2,45}$/.test(L)) out.push(L);
-  }
-  return unique(out);
+  const pick = (arr) => {
+    const cand = [];
+    for (let i=0;i<Math.min(arr.length, 12); i++){
+      const L = arr[i];
+      if (!L || BAD.test(L) || looksAddr.test(L)) continue;
+      const digits = (L.match(/\d/g)||[]).length;
+      const letters = (L.match(/\p{L}/gu)||[]).length;
+      const upper = (L.match(/[A-ZÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸ]/g)||[]).length;
+      const ratio = letters ? upper/letters : 0;
+
+      let score = 0;
+      if (KNOWN.test(L)) score += 5;
+      score += Math.min(letters,25)/25;
+      score += ratio*3;
+      score -= Math.min(digits,6)*0.5;
+
+      cand.push({L, score});
+    }
+    return cand.sort((a,b)=>b.score-a.score).map(x=>x.L);
+  };
+
+  const m1 = pick(top);
+  const m2 = pick(full);
+  const out = unique([...(m1||[]), ...(m2||[])]);
+  return out.slice(0,5);
 }
 
-function fromDateKeywords(text){
-  // capte "DATE: 12/07/2025", "FECHA 12-07-25", etc.
-  const rx = /(?:DATE|FECHA|DATA|D\.|FEC\.?)\s*[:\-]?\s*([0-3]?\d[\/\.\-][01]?\d[\/\.\-]\d{2,4}|20\d{2}[\/\.\-][01]?\d[\/\.\-][0-3]?\d)/ig;
-  const out = []; let m; while((m = rx.exec(text))) out.push(m[1]); return out;
-}
-function strictDateRegex(text){
-  // toutes dates plausibles autonomes
-  const rx = /\b([0-3]?\d[\/\.\-][01]?\d[\/\.\-]\d{2,4}|20\d{2}[\/\.\-][01]?\d[\/\.\-][0-3]?\d)\b/g;
-  const out = []; let m; while((m = rx.exec(text))) out.push(m[1]); return out;
+/* --- Dates --- */
+function dateCandidates(lines){
+  const text = lines.join('\n');
+  const out = [];
+
+  // "Date: 07/08/2025 11:36" | "Fecha: 07.08.25"
+  const kw = /(?:DATE|FECHA|DATA|D\.|FEC\.?)\s*[:\-]?\s*((?:[0-3]?\d[\/.\-][01]?\d[\/.\-]\d{2,4})|(?:20\d{2}[\/.\-][01]?\d[\/.\-][0-3]?\d))/ig;
+  let m; while((m = kw.exec(text))) out.push(m[1]);
+
+  // dates isolées
+  const any = /\b((?:[0-3]?\d[\/.\-][01]?\d[\/.\-]\d{2,4})|(?:20\d{2}[\/.\-][01]?\d[\/.\-][0-3]?\d))\b/g;
+  while((m = any.exec(text))) out.push(m[1]);
+
+  // normalise -> DD/MM/YYYY puis transformera en ISO au clic
+  const norm = unique(out.map(normalizeDate).filter(Boolean));
+  return norm.slice(0,5);
 }
 function normalizeDate(s){
-  // retourne "DD/MM/YYYY" ou "" si invalide
   const a = String(s||'').trim();
-  let m = a.match(/^(\d{1,2})[\/\.\-](\d{1,2})[\/\.\-](\d{2,4})$/);
+  let m = a.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
   if (m) {
     let d=+m[1], mo=+m[2], y=+m[3]; if (y<100) y+=2000;
     if (d>=1&&d<=31&&mo>=1&&mo<=12) return `${pad2(d)}/${pad2(mo)}/${y}`;
   }
-  m = a.match(/^(20\d{2})[\/\.\-]([01]?\d)[\/\.\-]([0-3]?\d)$/);
-  if (m) {
-    return `${pad2(+m[3])}/${pad2(+m[2])}/${m[1]}`;
-  }
+  m = a.match(/^(20\d{2})[\/.\-]([01]?\d)[\/.\-]([0-3]?\d)/);
+  if (m) { return `${pad2(+m[3])}/${pad2(+m[2])}/${m[1]}`; }
   return '';
 }
 
-function fromTotalKeywords(text){
-  const keys = [
-    /TOTAL\s*TT?C?/i, /TOTAL\s+À\s+PAYER/i, /NET\s+À\s+PAYER/i, /TOTAL\s+CB/i,
-    /IMPORTE\s+TOTAL/i, /IMPORTE/i, /A\s+PAGAR/i, /PAGADO/i,
-    /TOTAL\s+RESERVAT/i, /TOTAL\s+SUMINIST/i, /RESUMIT/i
-  ];
-  for (const k of keys){
-    const m = text.match(new RegExp(k.source + `\\s*[:\\-]?\\s*([\\d\\s]+[\\.,]\\d{2})\\s*(?:€|EUR)?`, k.flags));
+/* --- Totaux --- */
+function totalCandidates(lines){
+  // Cherche depuis le bas. Priorité : prix suivi/précédé de EUR, puis "TOTAL TTC/NET À PAYER",
+  // sinon premier prix rencontré en remontant.
+  const rxPrice = /(\d[\d\s]{0,3}(?:\s?\d{3})*[.,]\d{2})/;
+  const rxWithEUR = new RegExp(`${rxPrice.source}\\s*(?:€|EUR)\\b`, 'i');
+  const rxEURBefore = new RegExp(`\\b(?:€|EUR)\\s*${rxPrice.source}`, 'i');
+
+  const arr = Array.isArray(lines) ? lines : String(lines).split(/\r?\n/);
+  const rev = [...arr].reverse();
+
+  // 1) EUR à droite
+  for (const L of rev) {
+    const m = L.match(rxWithEUR);
+    if (m) return [m[1]];
+  }
+  // 2) EUR à gauche
+  for (const L of rev) {
+    const m = L.match(rxEURBefore);
+    if (m) return [m[1]];
+  }
+  // 3) Mots-clés "TOTAL"/"NET À PAYER"
+  for (const L of rev) {
+    if (!/total|à\s*payer|pagar|pagado/i.test(L)) continue;
+    const m = L.match(rxPrice);
+    if (m) return [m[1]];
+  }
+  // 4) Fallback : premier prix en remontant (garde les centimes)
+  for (const L of rev) {
+    const m = L.match(rxPrice);
     if (m) return [m[1]];
   }
   return [];
 }
-function plausibleAmounts(linesOrText){
-  const lines = Array.isArray(linesOrText) ? linesOrText : String(linesOrText).split(/\r?\n/);
-  const rx1 = /(\d[\d\s]{0,3}(?:\s?\d{3})*[.,]\d{2})\s*(?:€|EUR)\b/gi;
-  const rx2 = /\b(\d[\d\s]{0,3}(?:\s?\d{3})*[.,]\d{2})\b(?!\s*%)/g;
-  const out = [];
-  for (const L of lines){
-    rx1.lastIndex = 0; rx2.lastIndex = 0; let m;
-    while((m = rx1.exec(L))) out.push(m[1]);
-    while((m = rx2.exec(L))) out.push(m[1]);
-  }
-  return unique(out).map(r => ({r, v: parseFloat(r.replace(/\s/g,'').replace(',', '.'))}))
-                    .filter(x => Number.isFinite(x.v) && x.v >= 0.2 && x.v <= 20000)
-                    .sort((a,b)=>b.v-a.v)
-                    .map(x => x.r);
-}
 
+/* =======================
+   Rendu candidats -> champs
+======================= */
 function applyCandidates(c){
   // Merchant
   $('#merchant').value = c.merchants[0] || '';
@@ -493,7 +507,7 @@ function applyCandidates(c){
   if (c.dates[0]) setDateInputSmart(c.dates[0]);
   $('#dateCandidates').innerHTML = chipsHTML(c.dates);
 
-  // Total
+  // Total (garde les centimes)
   $('#total').value = toFrMoney(c.totals[0] || '');
   $('#totalCandidates').innerHTML = chipsHTML(c.totals.map(toFrMoney));
 
@@ -511,7 +525,6 @@ function escapeHtml(s) {
   }[m]));
 }
 function unique(arr){ return [...new Set(arr.map(s=>String(s).trim()).filter(Boolean))]; }
-function normNum(s){ return String(s).replace(/\s/g,'').replace(',', '.'); }
 function toFrMoney(s){
   if (!s) return '';
   const n = parseFloat(String(s).replace(/\s/g,'').replace(',', '.'));
@@ -537,7 +550,7 @@ async function saveToSheet(){
       : {label:'O', date:'P', total:'Q'};
 
     const label   = ($('#merchant').value || '').trim();
-    const dateStr = getDateFromInput(); // en DD/MM/YYYY
+    const dateStr = getDateFromInput(); // DD/MM/YYYY
     const totalNum = parseEuroToNumber($('#total').value);
 
     if (!label || !dateStr || totalNum == null) throw new Error('Champs incomplets');
