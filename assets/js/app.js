@@ -160,34 +160,45 @@ function waitFor(test,every=100,timeout=10000){
 
 /* ==== Scan + API ==== */
 async function handleImageChange(e){
-  const file=e.target.files?.[0]; if(!file) return; 
-  enableSave(false); setStatus('Chargement de la photo…');
+  const file = e.target.files?.[0];
+  if (!file) return;
+  enableSave(false);
+  setStatus('Chargement de la photo…');
 
-  try{
-    const img=await fileToImage(file);
+  try {
+    // --- Aperçu non étiré : on affiche directement le fichier
+    const url = URL.createObjectURL(file);
+    $('#preview').src = url;
 
-    setStatus('Détection et redressement…');
-    let scannedCanvas;
-    try{
-      if(typeof jscanify==='undefined') throw new Error('jscanify non chargé');
-      const base=drawImageFit(img,1400);
-      const scanner=new jscanify();
-      scannedCanvas=scanner.extractPaper(base, base.width, base.height) || base;
-    }catch(err){
-      console.warn('jscanify failed, fallback original:',err);
-      scannedCanvas=drawImageFit(img,1400);
-    }
-    $('#preview').src=scannedCanvas.toDataURL('image/jpeg',0.9);
-
+    // --- IMPORTANT : on envoie LA PHOTO ORIGINALE, pas un canvas recompressé
     setStatus('Analyse du ticket…');
-    const b64=canvasToBase64Jpeg(scannedCanvas,0.9);
-    const parsed=await parseReceiptViaAPI(b64);
+    const imageBase64 = await fileToBase64NoPrefix(file); // original
+
+    // (Optionnel) Si tu veux garder jscanify pour plus tard :
+    // const corrected = await tryJscanifyToBase64(file); // à n’utiliser que si nécessaire
+
+    const parsed = await parseReceiptViaAPI(imageBase64);
     applyParsedToForm(parsed);
     setStatus('Reconnaissance OK. Vérifie puis “Enregistrer”.');
-  }catch(e2){
-    console.error(e2);
+    validateCanSave();
+  } catch (err) {
+    console.error(err);
     setStatus('Analyse indisponible — corrige manuellement puis enregistre.');
   }
+}
+// Convertit le fichier en base64 (SANS prefix data:)
+function fileToBase64NoPrefix(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result || '');
+      // r.result = "data:image/jpeg;base64,AAA..."
+      const b64 = s.includes(',') ? s.split(',')[1] : s;
+      resolve(b64);
+    };
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
 }
 function drawImageFit(img,max=1200){
   const r=Math.min(max/img.naturalWidth,max/img.naturalHeight,1);
