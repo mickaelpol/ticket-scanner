@@ -5,7 +5,7 @@
 const ALLOWED_EMAILS = ['polmickael3@gmail.com','sabrinamedjoub@gmail.com'].map(e=>e.toLowerCase());
 const CLIENT_ID      = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';
 const API_KEY        = 'VOTRE_API_KEY'; // optionnel
-const SPREADSHEET_ID = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWxB7LmRZHMq7jZI'.replace('xB',''); // (sécurité mineure visuelle)
+const SPREADSHEET_ID  = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI';
 const DEFAULT_SHEET  = 'Août 2025';
 const RECEIPT_API_URL = 'https://receipt-parser.polmickael3.workers.dev'; // ← METS TON URL
 
