@@ -31,19 +31,16 @@ body {
 
 /* Aperçu image */
 .preview-box {
-  border: 1px dashed #1f2937;
-  border-radius: 1rem;
-  aspect-ratio: 4 / 3;
-  display: grid;
-  place-items: center;
+  background: #111;
+  border-radius: 8px;
   overflow: hidden;
-  background: #0b1226;
+  /* laisse l’image faire sa taille naturellement */
 }
-
-#preview {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
+.preview-box img {
+  display: block;
+  max-width: 100%;
+  height: auto;          /* <-- évite l’étirement vertical */
+  object-fit: contain;   /* garde le ratio si tu forces une hauteur */
 }
 
 /* Suggestions (chips) */
