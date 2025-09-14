@@ -77,9 +77,16 @@ function drawImageFit(img,max=1400){ const r=Math.min(max/img.naturalWidth,max/i
 function fileToImage(file){ return new Promise((resolve,reject)=>{ const img=new Image(); img.onload=()=>resolve(img); img.onerror=reject; img.src=URL.createObjectURL(file); }); }
 function canvasToBase64Jpeg(canvas,q=0.9){ return canvas.toDataURL('image/jpeg',q).split(',')[1]; }
 async function parseReceiptViaAPI(imageBase64){
-  const resp=await fetch(RECEIPT_API_URL,{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ imageBase64 }) });
-  const json=await resp.json().catch(()=>({}));
-  if(!resp.ok || json.error) throw new Error(json?.error || `HTTP ${resp.status}`);
+  const resp = await fetch(RECEIPT_API_URL, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ imageBase64 })
+  });
+  const json = await resp.json().catch(()=> ({}));
+  if (!resp.ok || json.error) {
+    const msg = typeof json.error === 'object' ? JSON.stringify(json.error) : (json.error || `HTTP ${resp.status}`);
+    throw new Error(msg);
+  }
   return json; // { supplier, dateISO, total, items }
 }
 function applyParsedToForm(p){
