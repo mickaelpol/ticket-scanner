@@ -1,13 +1,13 @@
 /* =======================
    CONFIG (À RENSEIGNER)
 ======================= */
+// ↓↓↓ ADAPTE ICI ↓↓↓
 const ALLOWED_EMAILS = ['polmickael3@gmail.com','sabrinamedjoub@gmail.com'].map(e=>e.toLowerCase());
-const SCRIPT_ID = '1dkuTGVPxWwq5Ib6EK2iLsJt9HjjH1ll1iMbMB8-ebSEUiUsLmsNqNCGh';   // (non utilisé côté front)
-const CLIENT_ID = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';   // OAuth Web client
-const API_KEY         = 'VOTRE_API_KEY'; // optionnel
-const SPREADSHEET_ID  = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI';
-const DEFAULT_SHEET   = 'Août 2025';
-const OCR_LANG        = 'eng+fra+spa+cat'; // FR/EN/ES/CAT
+const CLIENT_ID      = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';
+const API_KEY        = 'VOTRE_API_KEY'; // optionnel
+const SPREADSHEET_ID = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWxB7LmRZHMq7jZI'.replace('xB',''); // (sécurité mineure visuelle)
+const DEFAULT_SHEET  = 'Août 2025';
+const RECEIPT_API_URL = 'https://receipt-parser.polmickael3.workers.dev'; // ← METS TON URL
 
 /* =======================
    ÉTAT GLOBAL
@@ -35,15 +35,10 @@ document.addEventListener('DOMContentLoaded', () => {
    UI
 ======================= */
 function bindUI(){
-  bindChips('merchantCandidates','merchant');
-  bindChips('dateCandidates','date');
-  bindChips('totalCandidates','total');
-
-  $('#file').addEventListener('change', handleImageChange);
-  $('#btnSave').addEventListener('click', saveToSheet);
-  $('#btnReset').addEventListener('click', resetForm);
-
-  $('#btnAuth').addEventListener('click', async () => {
+  $('#file')?.addEventListener('change', handleImageChange);
+  $('#btnSave')?.addEventListener('click', saveToSheet);
+  $('#btnReset')?.addEventListener('click', resetForm);
+  $('#btnAuth')?.addEventListener('click', async () => {
     try {
       setStatus('Connexion…');
       await ensureConnected(true);
@@ -55,34 +50,21 @@ function bindUI(){
       setStatus('Échec connexion');
     }
   });
-
-  // Normalise le total au blur (12,3 -> 12,30)
+  // normalise le total au blur (12,3 -> 12,30)
   const total = $('#total');
-  if (total) total.addEventListener('blur', () => {
-    if (!total.value) return;
+  total?.addEventListener('blur', () => {
     const n = parseEuroToNumber(total.value);
     if (n != null) total.value = n.toFixed(2).replace('.', ',');
-  });
-}
-
-function bindChips(containerId, inputId){
-  const box = document.getElementById(containerId);
-  if (!box) return;
-  box.addEventListener('click', (e) => {
-    const chip = e.target.closest('.chip');
-    if (!chip) return;
-    const val = chip.getAttribute('data-v');
-    if (inputId === 'date') setDateInputSmart(val);
-    else if (inputId === 'total') $('#total').value = toFrMoney(val);
-    else document.getElementById(inputId).value = val;
     validateCanSave();
+  });
+  ['merchant','date'].forEach(id => {
+    $('#'+id)?.addEventListener('input', validateCanSave);
   });
 }
 
 function resetForm(){
-  const p = $('#preview'); if (p) p.src='';
+  $('#preview')?.removeAttribute('src');
   ['merchant','date','total'].forEach(id=>{ const el=$('#'+id); if (el) el.value=''; });
-  ['merchantCandidates','dateCandidates','totalCandidates'].forEach(id=>{ const el=$('#'+id); if (el) el.innerHTML=''; });
   enableSave(false); setStatus('Prêt.');
 }
 
@@ -91,40 +73,12 @@ function parseEuroToNumber(s){
   const n = parseFloat(String(s).replace(/\s+/g,'').replace(/[€]/g,'').replace(',','.'));
   return Number.isFinite(n) ? n : null;
 }
-
-/* ===== Helpers date pour <input type="date"> ===== */
-const pad2 = n => String(n).padStart(2, '0');
-
-function ddmmyyyyToISO(s){
-  const m = String(s||'').match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
-  if(!m) return '';
-  let d = +m[1], mo = +m[2], y = +m[3];
-  if (y < 100) y += 2000;
-  if (d<1||d>31||mo<1||mo>12) return '';
-  return `${y}-${pad2(mo)}-${pad2(d)}`;
-}
-function yyyymmddToISO(s){
-  const m = String(s||'').match(/^(20\d{2})[\/.\-]([01]?\d)[\/.\-]([0-3]?\d)$/);
-  if(!m) return '';
-  return `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`;
-}
-function setDateInputSmart(str){
-  const iso = ddmmyyyyToISO(str) || yyyymmddToISO(str);
-  const el = $('#date'); if (el) el.value = iso || '';
-}
-function isoToDDMMYYYY(iso){
-  const m = String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if(!m) return '';
-  return `${m[3]}/${m[2]}/${m[1]}`;
-}
-function getDateFromInput(){
-  return isoToDDMMYYYY($('#date').value);
-}
 function validateCanSave(){
-  const label = ($('#merchant').value||'').trim();
-  const dateOk = !!$('#date').value;
-  const totalOk = parseEuroToNumber($('#total').value) != null;
-  enableSave(!!label && dateOk && totalOk && !!($('#sheetSelect').value));
+  const label = ($('#merchant')?.value||'').trim();
+  const dateOk = !!$('#date')?.value;
+  const totalOk = parseEuroToNumber($('#total')?.value) != null;
+  const sheetOk = !!$('#sheetSelect')?.value;
+  enableSave(!!label && dateOk && totalOk && sheetOk);
 }
 
 /* =======================
@@ -209,7 +163,6 @@ async function updateAuthUI(){
 async function listSheets(){
   if (!accessToken) return;
   try {
-    // récupère 'index' pour choisir le dernier onglet si DEFAULT_SHEET absent
     const resp = await gapi.client.sheets.spreadsheets.get({
       spreadsheetId: SPREADSHEET_ID,
       fields: 'sheets(properties(sheetId,title,index))'
@@ -227,6 +180,7 @@ async function listSheets(){
     if (preselect) sel.value = preselect.title;
   } catch(e){
     console.warn('listSheets:', e);
+    setStatus('Impossible de lister les feuilles (droits ?).');
   }
 }
 function waitFor(test, every=100, timeout=10000){
@@ -241,7 +195,7 @@ function waitFor(test, every=100, timeout=10000){
 }
 
 /* =======================
-   SCAN (jscanify) → PREPROC (OpenCV) → OCR rapide
+   SCAN (jscanify) → ENVOI AU WORKER (Mindee)
 ======================= */
 async function handleImageChange(e){
   const file = e.target.files?.[0];
@@ -249,54 +203,38 @@ async function handleImageChange(e){
   enableSave(false);
   setStatus('Chargement de la photo…');
 
-  // 0) Lire l’image dans un <img>
-  const img = await fileToImage(file);
-
-  // 1) jscanify : détection + redressement (canvas)
-  setStatus('Détection et redressement…');
-  let scannedCanvas;
   try {
-    const baseCanvas = drawImageFit(img, 1200); // ✔ plus rapide
-    const scanner = new jscanify();
-    scannedCanvas = scanner.scan(baseCanvas); // canvas recadré/perspective corrigée
-  } catch (err) {
-    console.warn('jscanify failed, fallback original:', err);
-    scannedCanvas = drawImageFit(img, 1200);
+    const img = await fileToImage(file);
+
+    // 1) resize + jscanify
+    setStatus('Détection et redressement…');
+    let scannedCanvas;
+    try {
+      const baseCanvas = drawImageFit(img, 1400); // rapide & suffisant
+      const scanner = new jscanify();
+      scannedCanvas = scanner.scan(baseCanvas);   // canvas redressé
+    } catch (err) {
+      console.warn('jscanify failed, fallback original:', err);
+      scannedCanvas = drawImageFit(img, 1400);
+    }
+
+    // 2) preview
+    $('#preview').src = scannedCanvas.toDataURL('image/jpeg', 0.9);
+
+    // 3) appel Worker (Mindee)
+    setStatus('Analyse du ticket…');
+    const b64 = canvasToBase64Jpeg(scannedCanvas, 0.9);
+    const parsed = await parseReceiptViaAPI(b64);
+    applyParsedToForm(parsed);
+
+    setStatus('Reconnaissance OK. Vérifie puis “Enregistrer”.');
+  } catch (e2) {
+    console.error(e2);
+    setStatus('Analyse indisponible — corrige manuellement puis enregistre.');
   }
-
-  // 2) OpenCV : amélioration légère pour OCR (binarisation adaptative)
-  setStatus('Prétraitement (OpenCV)…');
-  const ocrCanvas = await enhanceForOCR_Canvas(scannedCanvas).catch(()=>{
-    return scannedCanvas; // fallback
-  });
-
-  // Preview
-  const preview = $('#preview');
-  if (preview) preview.src = ocrCanvas.toDataURL('image/jpeg', 0.9);
-
-  // 3) OCR RAPIDE : seulement bande haute & bande basse
-  setStatus('Lecture OCR (rapide)…');
-  const base64 = ocrCanvas.toDataURL('image/jpeg', 0.9).split(',')[1];
-  let { topText, bottomText } = await runOCRBandsOnly(base64);
-
-  // Fallback plein si une info manque
-  const needsFull = (!topText || topText.length < 20) || (!bottomText || bottomText.length < 20);
-  let fullText = '';
-  if (needsFull) {
-    setStatus('Lecture OCR (fallback plein)…');
-    fullText = await tesseractRecognize(base64);
-  }
-
-  // 4) Parsing (marchand, date, total) + suggestions
-  setStatus('Extraction des données…');
-  const parsed = parseReceipt({ fullText, topText, bottomText });
-  applyCandidates(parsed);
-
-  validateCanSave();
-  setStatus('Vérifie / ajuste puis “Enregistrer”.');
 }
 
-function drawImageFit(img, max = 1200){
+function drawImageFit(img, max = 1400){
   const r = Math.min(max / img.naturalWidth, max / img.naturalHeight, 1);
   const w = Math.round(img.naturalWidth * r);
   const h = Math.round(img.naturalHeight * r);
@@ -305,7 +243,6 @@ function drawImageFit(img, max = 1200){
   c.getContext('2d').drawImage(img, 0, 0, w, h);
   return c;
 }
-
 function fileToImage(file){
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -314,222 +251,24 @@ function fileToImage(file){
     img.src = URL.createObjectURL(file);
   });
 }
-
-/* ===== OpenCV : binarisation adaptative sur canvas ===== */
-async function enhanceForOCR_Canvas(inCanvas){
-  if (!window._opencvReady || !window.cv) return inCanvas;
-
-  const src = cv.imread(inCanvas);
-  const gray = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
-
-  const eq = new cv.Mat();
-  cv.equalizeHist(gray, eq);
-
-  const bw = new cv.Mat();
-  cv.adaptiveThreshold(eq, bw, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 31, 12);
-
-  const mean = cv.mean(bw)[0];
-  if (mean < 127) cv.bitwise_not(bw, bw);
-
-  const out = document.createElement('canvas');
-  out.width = bw.cols; out.height = bw.rows;
-  cv.imshow(out, bw);
-
-  [src, gray, eq, bw].forEach(m => { try { m.delete(); } catch(_){} });
-
-  return out;
+function canvasToBase64Jpeg(canvas, q=0.9){
+  return canvas.toDataURL('image/jpeg', q).split(',')[1];
 }
-
-/* ===== OCR bandes haute/basse ===== */
-async function runOCRBandsOnly(base64){
-  const [topB64, bottomB64] = await cutBands(base64, 0.00, 0.28, 0.62, 1.00);
-  const [topText, bottomText] = await Promise.all([
-    topB64 ? tesseractRecognize(topB64) : Promise.resolve(''),
-    bottomB64 ? tesseractRecognize(bottomB64) : Promise.resolve('')
-  ]);
-  return { topText, bottomText };
-}
-async function tesseractRecognize(base64){
-  const { data: { text } } = await Tesseract.recognize('data:image/jpeg;base64,' + base64, OCR_LANG, {
-    tessedit_pageseg_mode: '6'
+async function parseReceiptViaAPI(imageBase64){
+  const resp = await fetch(RECEIPT_API_URL, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ imageBase64 })
   });
-  return text || '';
+  const json = await resp.json();
+  if (!resp.ok || json.error) throw new Error(json.error || 'Erreur parsing');
+  return json; // { supplier, dateISO, total, items }
 }
-async function cutBands(base64, topStart=0, topEnd=0.25, botStart=0.65, botEnd=1.0){
-  return new Promise((resolve)=>{
-    const img = new Image();
-    img.onload = ()=>{
-      const W = img.width, H = img.height;
-      const c = document.createElement('canvas'), ctx=c.getContext('2d');
-      c.width=W; c.height=H; ctx.drawImage(img,0,0);
-      function cut(y0, y1){
-        const ch = Math.max(1, Math.round(H*(y1-y0)));
-        const cy = Math.round(H*y0);
-        const seg = document.createElement('canvas'); seg.width=W; seg.height=ch;
-        const sctx = seg.getContext('2d'); sctx.drawImage(c, 0, cy, W, ch, 0, 0, W, ch);
-        return seg.toDataURL('image/jpeg', 0.9).split(',')[1];
-      }
-      resolve([cut(topStart, topEnd), cut(botStart, botEnd)]);
-    };
-    img.src = 'data:image/jpeg;base64,' + base64;
-  });
-}
-
-/* =======================
-   PARSING + SUGGESTIONS
-======================= */
-function parseReceipt(ocr){
-  const clean = s => String(s||'').replace(/\u00A0/g,' ').replace(/\s+/g,' ').trim();
-
-  const top  = (ocr.topText  || '').split(/\r?\n/).map(clean).filter(Boolean);
-  const bot  = (ocr.bottomText|| '').split(/\r?\n/).map(clean).filter(Boolean);
-  const full = (ocr.fullText  || '').split(/\r?\n/).map(clean).filter(Boolean);
-
-  // ENSEIGNE : fort au début + mots-clés connus (E.S., GASOPAS, etc.)
-  const merchants = merchantCandidates(top, full);
-
-  // DATE : “Date: 07/08/2025 11:36”, “Fecha: 07.08.25”, etc.
-  const dates = dateCandidates([...top, ...full]);
-
-  // TOTAL (depuis le bas, privilégie près de "EUR")
-  const totals = totalCandidates(bot.length ? bot : full);
-
-  return { merchants, dates, totals };
-}
-
-/* --- Marchand --- */
-function merchantCandidates(top, full){
-  const KNOWN = /(E\.?S\.?|ESTACI[ÓO]N|GASOLINERA|GASOPAS|TOTAL(?:\s?ENERGIES)?|CARREFOUR|LECLERC|AUCHAN|LIDL|ALDI|MONOPRIX|CASINO|INTERMARCH[ÉE]|REDSYS|SHELL|BP|REPSOL)/i;
-  const BAD = /(SIRET|TVA|FACTURE|TICKET|N[°o]|NUM[ÉE]RO|CARTE|PAIEMENT|VENTE|CAISSE|CLIENT|TEL|WWW|HTTP|EMAIL|SITE\s+WEB|CIF|NRT|NIF|RCS|CONFIRMACI[ÓO]N|CONFIRMATION)/i;
-  const looksAddr = /(RUE|AVENUE|AVDA|AV\.|BD|BOULEVARD|PLAZA|PLACE|CHEMIN|IMPASSE|CARRER|CP|\b\d{5}\b|ANDORRA|FRANCE|ESPAÑA|PORTUGAL)/i;
-
-  const pick = (arr) => {
-    const cand = [];
-    for (let i=0;i<Math.min(arr.length, 12); i++){
-      const L = arr[i];
-      if (!L || BAD.test(L) || looksAddr.test(L)) continue;
-      const digits = (L.match(/\d/g)||[]).length;
-      const letters = (L.match(/\p{L}/gu)||[]).length;
-      const upper = (L.match(/[A-ZÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸ]/g)||[]).length;
-      const ratio = letters ? upper/letters : 0;
-
-      let score = 0;
-      if (KNOWN.test(L)) score += 5;
-      score += Math.min(letters,25)/25;
-      score += ratio*3;
-      score -= Math.min(digits,6)*0.5;
-
-      cand.push({L, score});
-    }
-    return cand.sort((a,b)=>b.score-a.score).map(x=>x.L);
-  };
-
-  const m1 = pick(top);
-  const m2 = pick(full);
-  const out = unique([...(m1||[]), ...(m2||[])]);
-  return out.slice(0,5);
-}
-
-/* --- Dates --- */
-function dateCandidates(lines){
-  const text = lines.join('\n');
-  const out = [];
-
-  // "Date: 07/08/2025 11:36" | "Fecha: 07.08.25"
-  const kw = /(?:DATE|FECHA|DATA|D\.|FEC\.?)\s*[:\-]?\s*((?:[0-3]?\d[\/.\-][01]?\d[\/.\-]\d{2,4})|(?:20\d{2}[\/.\-][01]?\d[\/.\-][0-3]?\d))/ig;
-  let m; while((m = kw.exec(text))) out.push(m[1]);
-
-  // dates isolées
-  const any = /\b((?:[0-3]?\d[\/.\-][01]?\d[\/.\-]\d{2,4})|(?:20\d{2}[\/.\-][01]?\d[\/.\-][0-3]?\d))\b/g;
-  while((m = any.exec(text))) out.push(m[1]);
-
-  // normalise -> DD/MM/YYYY puis transformera en ISO au clic
-  const norm = unique(out.map(normalizeDate).filter(Boolean));
-  return norm.slice(0,5);
-}
-function normalizeDate(s){
-  const a = String(s||'').trim();
-  let m = a.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
-  if (m) {
-    let d=+m[1], mo=+m[2], y=+m[3]; if (y<100) y+=2000;
-    if (d>=1&&d<=31&&mo>=1&&mo<=12) return `${pad2(d)}/${pad2(mo)}/${y}`;
-  }
-  m = a.match(/^(20\d{2})[\/.\-]([01]?\d)[\/.\-]([0-3]?\d)/);
-  if (m) { return `${pad2(+m[3])}/${pad2(+m[2])}/${m[1]}`; }
-  return '';
-}
-
-/* --- Totaux --- */
-function totalCandidates(lines){
-  // Cherche depuis le bas. Priorité : prix suivi/précédé de EUR, puis "TOTAL TTC/NET À PAYER",
-  // sinon premier prix rencontré en remontant.
-  const rxPrice = /(\d[\d\s]{0,3}(?:\s?\d{3})*[.,]\d{2})/;
-  const rxWithEUR = new RegExp(`${rxPrice.source}\\s*(?:€|EUR)\\b`, 'i');
-  const rxEURBefore = new RegExp(`\\b(?:€|EUR)\\s*${rxPrice.source}`, 'i');
-
-  const arr = Array.isArray(lines) ? lines : String(lines).split(/\r?\n/);
-  const rev = [...arr].reverse();
-
-  // 1) EUR à droite
-  for (const L of rev) {
-    const m = L.match(rxWithEUR);
-    if (m) return [m[1]];
-  }
-  // 2) EUR à gauche
-  for (const L of rev) {
-    const m = L.match(rxEURBefore);
-    if (m) return [m[1]];
-  }
-  // 3) Mots-clés "TOTAL"/"NET À PAYER"
-  for (const L of rev) {
-    if (!/total|à\s*payer|pagar|pagado/i.test(L)) continue;
-    const m = L.match(rxPrice);
-    if (m) return [m[1]];
-  }
-  // 4) Fallback : premier prix en remontant (garde les centimes)
-  for (const L of rev) {
-    const m = L.match(rxPrice);
-    if (m) return [m[1]];
-  }
-  return [];
-}
-
-/* =======================
-   Rendu candidats -> champs
-======================= */
-function applyCandidates(c){
-  // Merchant
-  $('#merchant').value = c.merchants[0] || '';
-  $('#merchantCandidates').innerHTML = chipsHTML(c.merchants);
-
-  // Date
-  if (c.dates[0]) setDateInputSmart(c.dates[0]);
-  $('#dateCandidates').innerHTML = chipsHTML(c.dates);
-
-  // Total (garde les centimes)
-  $('#total').value = toFrMoney(c.totals[0] || '');
-  $('#totalCandidates').innerHTML = chipsHTML(c.totals.map(toFrMoney));
-
+function applyParsedToForm(p){
+  if (p.supplier) $('#merchant').value = p.supplier;
+  if (p.dateISO)  $('#date').value     = p.dateISO; // input type="date" accepte YYYY-MM-DD
+  if (p.total!=null) $('#total').value = p.total.toFixed(2).replace('.', ',');
   validateCanSave();
-}
-
-const chipsHTML = arr =>
-  (arr && arr.length)
-    ? arr.map(v=>`<span class="chip" data-v="${escapeHtml(v)}">${escapeHtml(v)}</span>`).join('')
-    : `<span class="text-muted small">—</span>`;
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, m => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;"
-  }[m]));
-}
-function unique(arr){ return [...new Set(arr.map(s=>String(s).trim()).filter(Boolean))]; }
-function toFrMoney(s){
-  if (!s) return '';
-  const n = parseFloat(String(s).replace(/\s/g,'').replace(',', '.'));
-  if (!Number.isFinite(n)) return String(s);
-  return n.toFixed(2).replace('.', ',');
 }
 
 /* =======================
@@ -550,7 +289,8 @@ async function saveToSheet(){
       : {label:'O', date:'P', total:'Q'};
 
     const label   = ($('#merchant').value || '').trim();
-    const dateStr = getDateFromInput(); // DD/MM/YYYY
+    const dateISO = $('#date').value; // YYYY-MM-DD du <input type="date">
+    const dateStr = isoToDDMMYYYY(dateISO); // Sheet attendu en dd/mm/yyyy
     const totalNum = parseEuroToNumber($('#total').value);
 
     if (!label || !dateStr || totalNum == null) throw new Error('Champs incomplets');
@@ -599,6 +339,11 @@ async function saveToSheet(){
   }
 }
 
+function isoToDDMMYYYY(iso){
+  const m = String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return '';
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
 async function findNextEmptyRow(sheetName, colLetter, startRow=11){
   const endRow = startRow + 1000;
   const range = `${sheetName}!${colLetter}${startRow}:${colLetter}${endRow}`;
