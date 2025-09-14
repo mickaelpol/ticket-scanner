@@ -1,13 +1,14 @@
 /* =======================
    CONFIG (À RENSEIGNER)
 ======================= */
-// ↓↓↓ ADAPTE ICI ↓↓↓
 const ALLOWED_EMAILS = ['polmickael3@gmail.com','sabrinamedjoub@gmail.com'].map(e=>e.toLowerCase());
 const CLIENT_ID      = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';
 const API_KEY        = 'VOTRE_API_KEY'; // optionnel
-const SPREADSHEET_ID  = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI';
+const SPREADSHEET_ID = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI'; // ← remis tel quel
 const DEFAULT_SHEET  = 'Août 2025';
-const RECEIPT_API_URL = 'https://receipt-parser.polmickael3.workers.dev'; // ← METS TON URL
+
+// ⚠️ Mets ici l’URL EXACTE affichée dans Cloudflare (Overview du Worker)
+const RECEIPT_API_URL = "https://receipt-parser.polmickael3.workers.dev";
 
 /* =======================
    ÉTAT GLOBAL
@@ -50,16 +51,14 @@ function bindUI(){
       setStatus('Échec connexion');
     }
   });
-  // normalise le total au blur (12,3 -> 12,30)
+
   const total = $('#total');
   total?.addEventListener('blur', () => {
     const n = parseEuroToNumber(total.value);
     if (n != null) total.value = n.toFixed(2).replace('.', ',');
     validateCanSave();
   });
-  ['merchant','date'].forEach(id => {
-    $('#'+id)?.addEventListener('input', validateCanSave);
-  });
+  ['merchant','date'].forEach(id => $('#'+id)?.addEventListener('input', validateCanSave));
 }
 
 function resetForm(){
@@ -195,7 +194,7 @@ function waitFor(test, every=100, timeout=10000){
 }
 
 /* =======================
-   SCAN (jscanify) → ENVOI AU WORKER (Mindee)
+   SCAN (jscanify) → ENVOI AU WORKER
 ======================= */
 async function handleImageChange(e){
   const file = e.target.files?.[0];
@@ -206,22 +205,22 @@ async function handleImageChange(e){
   try {
     const img = await fileToImage(file);
 
-    // 1) resize + jscanify
     setStatus('Détection et redressement…');
     let scannedCanvas;
     try {
-      const baseCanvas = drawImageFit(img, 1400); // rapide & suffisant
+      if (typeof jscanify === 'undefined') throw new Error('jscanify not loaded');
+      const baseCanvas = drawImageFit(img, 1400);
       const scanner = new jscanify();
-      scannedCanvas = scanner.scan(baseCanvas);   // canvas redressé
+      scannedCanvas = scanner.extractPaper(baseCanvas, baseCanvas.width, baseCanvas.height);
+      // fallback si extractPaper ne trouve pas
+      if (!scannedCanvas || !scannedCanvas.getContext) scannedCanvas = scanner.highlightPaper(baseCanvas) || baseCanvas;
     } catch (err) {
       console.warn('jscanify failed, fallback original:', err);
       scannedCanvas = drawImageFit(img, 1400);
     }
 
-    // 2) preview
     $('#preview').src = scannedCanvas.toDataURL('image/jpeg', 0.9);
 
-    // 3) appel Worker (Mindee)
     setStatus('Analyse du ticket…');
     const b64 = canvasToBase64Jpeg(scannedCanvas, 0.9);
     const parsed = await parseReceiptViaAPI(b64);
@@ -260,19 +259,21 @@ async function parseReceiptViaAPI(imageBase64){
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ imageBase64 })
   });
-  const json = await resp.json();
-  if (!resp.ok || json.error) throw new Error(json.error || 'Erreur parsing');
+  const json = await resp.json().catch(()=> ({}));
+  if (!resp.ok || json.error) {
+    throw new Error(json?.error || `HTTP ${resp.status}`);
+  }
   return json; // { supplier, dateISO, total, items }
 }
 function applyParsedToForm(p){
   if (p.supplier) $('#merchant').value = p.supplier;
-  if (p.dateISO)  $('#date').value     = p.dateISO; // input type="date" accepte YYYY-MM-DD
-  if (p.total!=null) $('#total').value = p.total.toFixed(2).replace('.', ',');
+  if (p.dateISO)  $('#date').value     = p.dateISO; // input type="date"
+  if (p.total!=null) $('#total').value = Number(p.total).toFixed(2).replace('.', ',');
   validateCanSave();
 }
 
 /* =======================
-   ENREGISTREMENT SHEETS (format € à droite)
+   ENREGISTREMENT SHEETS
 ======================= */
 async function saveToSheet(){
   try {
@@ -289,8 +290,8 @@ async function saveToSheet(){
       : {label:'O', date:'P', total:'Q'};
 
     const label   = ($('#merchant').value || '').trim();
-    const dateISO = $('#date').value; // YYYY-MM-DD du <input type="date">
-    const dateStr = isoToDDMMYYYY(dateISO); // Sheet attendu en dd/mm/yyyy
+    const dateISO = $('#date').value;
+    const dateStr = isoToDDMMYYYY(dateISO);
     const totalNum = parseEuroToNumber($('#total').value);
 
     if (!label || !dateStr || totalNum == null) throw new Error('Champs incomplets');

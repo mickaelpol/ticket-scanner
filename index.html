@@ -12,8 +12,9 @@
   <!-- Styles de l'app -->
   <link rel="stylesheet" href="assets/css/app.css"/>
 
-  <!-- jscanify (détection bords + redressement) -->
-  <script src="https://unpkg.com/jscanify/dist/jscanify.min.js"></script>
+  <!-- OpenCV + jscanify (CDN correct) -->
+  <script src="https://docs.opencv.org/4.7.0/opencv.js" async></script>
+  <script src="https://cdn.jsdelivr.net/gh/ColonelParrot/jscanify@master/src/jscanify.min.js"></script>
 
   <!-- Google Identity Services + gapi -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -90,7 +91,6 @@
             <div class="form-text text-muted">Enregistré en <b>monnaie €</b> (nombre formaté).</div>
           </div>
 
-          <!-- Boutons (dans le flux, sous Total) -->
           <div class="actions-mobile">
             <button class="btn btn-success" id="btnSave" disabled>Enregistrer dans le Google Sheet</button>
             <button class="btn btn-danger" id="btnReset">Réinitialiser</button>
