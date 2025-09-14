@@ -189,11 +189,14 @@ async function handleImageChange(e){
     setStatus('Analyse indisponible — corrige manuellement puis enregistre.');
   }
 }
-function drawImageFit(img,max=1400){
+function drawImageFit(img,max=1200){
   const r=Math.min(max/img.naturalWidth,max/img.naturalHeight,1);
   const w=Math.round(img.naturalWidth*r), h=Math.round(img.naturalHeight*r);
   const c=document.createElement('canvas'); c.width=w; c.height=h;
   c.getContext('2d').drawImage(img,0,0,w,h); return c;
+}
+function canvasToBase64Jpeg(canvas,q=0.75){ 
+  return canvas.toDataURL('image/jpeg',q).split(',')[1]; 
 }
 function fileToImage(file){
   return new Promise((resolve,reject)=>{
@@ -211,12 +214,17 @@ async function parseReceiptViaAPI(imageBase64){
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ imageBase64 })
   });
-  const json = await resp.json().catch(()=> ({}));
+
+  const text = await resp.text();
+  let json = {};
+  try { json = JSON.parse(text); } catch { /* texte brut */ }
+
   if (!resp.ok || json.error) {
-    const msg = typeof json.error === 'object' ? JSON.stringify(json.error) : (json.error || `HTTP ${resp.status}`);
+    console.error('Backend error:', { status: resp.status, body: text });
+    const msg = json.error ? (typeof json.error === 'string' ? json.error : JSON.stringify(json.error)) : `HTTP ${resp.status}`;
     throw new Error(msg);
   }
-  return json; // { supplier, dateISO, total, items? }
+  return json; // { supplier, dateISO, total }
 }
 function applyParsedToForm(p){
   if(p.supplier) $('#merchant').value=p.supplier;
