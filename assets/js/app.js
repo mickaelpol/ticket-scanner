@@ -9,8 +9,8 @@ if (apiOverride) {
 }
 
 // 1) Endpoint de config sur le back (renvoie { ok:true, receipt_api_url: "..." })
-//    -> adapte si tu utilises un fichier config séparé : '.../config.php'
-const CONFIG_URL = 'https://receipt-php-mindee.onrender.com/config.php';
+//    Ici on passe par index.php?config=1 puisqu'on a supprimé config.php
+const CONFIG_URL = 'https://receipt-php-mindee.onrender.com/index.php?config=1';
 
 // 2) URL de l’API résolue dynamiquement au boot (via resolveApiUrl)
 let RECEIPT_API_URL = null;
@@ -32,6 +32,8 @@ const DEFAULT_COLUMNS = { label:'A', date:'B', total:'C' };
 
 /* ========= STATE ========= */
 let accessToken=null, tokenClient=null, gapiReady=false, gisReady=false, currentUserEmail=null, sheetNameToId={};
+let _previewUrl = null;
+
 const $=s=>document.querySelector(s);
 const setStatus=msg=>{ const el=$('#status'); if(el) el.textContent=msg; console.log('[Scan]',msg); };
 const enableSave=on=>{ const b=$('#btnSave'); if(b) b.disabled=!on; };
@@ -88,6 +90,7 @@ async function resolveApiUrl(){
 function bindUI(){
   $('#file')?.addEventListener('change', onImagePicked);
   $('#btnSave')?.addEventListener('click', saveToSheet);
+  $('#btnReset')?.addEventListener('click', resetForm);
   $('#btnAuth')?.addEventListener('click', async ()=>{
     try{ setStatus('Connexion…'); await ensureConnected(true); await updateAuthUI(); await listSheets(); setStatus('Connecté ✓'); }
     catch(e){ console.error(e); setStatus('Échec connexion'); }
@@ -102,7 +105,12 @@ function bindUI(){
 }
 
 function resetForm(){
+  // vide les champs
   ['merchant','date','total'].forEach(id=>{ const el=$('#'+id); if(el) el.value=''; });
+  // retire la preview
+  const img = $('#preview');
+  if (img) img.removeAttribute('src');
+  if (_previewUrl) { URL.revokeObjectURL(_previewUrl); _previewUrl = null; }
   enableSave(false); setStatus('Prêt.');
 }
 function parseEuroToNumber(s){
@@ -215,7 +223,21 @@ async function onImagePicked(e){
   if(!file) return;
   enableSave(false); setStatus('Analyse du ticket…');
 
+  // Preview image (non compressée) + nettoyage de l’ancienne URL objet
+  const img = $('#preview');
+  if (_previewUrl) { URL.revokeObjectURL(_previewUrl); _previewUrl = null; }
+  if (img) {
+    _previewUrl = URL.createObjectURL(file);
+    img.src = _previewUrl;
+  }
+
   try{
+    // Assure un jeton Google côté mobile (prompt si nécessaire)
+    if (!accessToken) {
+      try { await ensureConnected(true); }
+      catch { setStatus('Connexion Google requise.'); return; }
+    }
+
     // S’assure que l’URL API est prête (au cas où on arrive ici très tôt)
     if (!apiReady || !RECEIPT_API_URL) {
       RECEIPT_API_URL = await resolveApiUrl();
@@ -228,6 +250,7 @@ async function onImagePicked(e){
     if(parsed.supplier) $('#merchant').value = parsed.supplier;
     if(parsed.dateISO)  $('#date').value     = parsed.dateISO;
     if(parsed.total!=null) $('#total').value = Number(parsed.total).toFixed(2).replace('.',',');
+
     setStatus('Reconnaissance OK. Vérifie puis « Enregistrer ».');
   }catch(err){
     console.error(err); setStatus('Analyse indisponible — complète manuellement.');
