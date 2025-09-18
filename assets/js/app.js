@@ -1,14 +1,18 @@
 /* ========= CONFIG ========= */
 
-// 0) Override rapide via ?api=... (pratique pour mobile/tests)
-const apiParam = new URLSearchParams(location.search).get('api');
-if (apiParam) localStorage.setItem('RECEIPT_API_URL', apiParam);
+/** 0) Override rapide via ?api=... (pratique pour tests/mobile)
+ * Exemple: https://<user>.github.io/<repo>/?api=https://xxxx.ngrok-free.app/index.php
+ */
+const apiOverride = new URLSearchParams(location.search).get('api');
+if (apiOverride) {
+  localStorage.setItem('RECEIPT_API_URL', apiOverride);
+}
 
-// 1) Endpoint de config sur le back (renvoie {receipt_api_url})
-//    -> à adapter si besoin : https://<ton-app>.onrender.com/config.php
-const CONFIG_URL = 'https://receipt-php-mindee.onrender.com/config.php';
+// 1) Endpoint de config sur le back (renvoie { ok:true, receipt_api_url: "..." })
+//    -> adapte si tu utilises un fichier config séparé : '.../config.php'
+const CONFIG_URL = 'https://receipt-php-mindee.onrender.com/index.php/config.php';
 
-// 2) URL de l’API reçusée à l’exécution (résolue au boot)
+// 2) URL de l’API résolue dynamiquement au boot (via resolveApiUrl)
 let RECEIPT_API_URL = null;
 let apiReady = false;
 
@@ -36,7 +40,7 @@ const enableSave=on=>{ const b=$('#btnSave'); if(b) b.disabled=!on; };
 document.addEventListener('DOMContentLoaded', initApp);
 
 async function initApp(){
-  // Résout l’URL du back AVANT d’attacher les handlers
+  // Résout TOUJOURS l’URL du back (PC & mobile)
   RECEIPT_API_URL = await resolveApiUrl();
   apiReady = true;
   setStatus('API: ' + RECEIPT_API_URL);
@@ -46,27 +50,38 @@ async function initApp(){
 }
 
 /** Ordre de résolution :
- *   1) localStorage.RECEIPT_API_URL (peut être set par ?api=...)
- *   2) GET CONFIG_URL -> { receipt_api_url }
- *   3) défaut prod
+ *   1) ?api=...  (prioritaire, et mémorisé)
+ *   2) GET CONFIG_URL (appel réseau systématique, avec cache-buster)
+ *   3) localStorage (si déjà mémorisé)
+ *   4) défaut prod (et on mémorise)
  */
 async function resolveApiUrl(){
+  const qsApi = new URLSearchParams(location.search).get('api');
+  if (qsApi) return qsApi; // override explicite → on ne contacte pas la config
+
+  // 2) On tente /config systématiquement
+  try {
+    const u = new URL(CONFIG_URL);
+    // cache-buster pour éviter le cache sur mobile/Pages
+    u.searchParams.set('t', String(Date.now()));
+    const res = await fetch(u.toString(), { cache: 'no-store' });
+    const j = await res.json().catch(()=>null);
+    if (res.ok && j && j.receipt_api_url) {
+      localStorage.setItem('RECEIPT_API_URL', j.receipt_api_url);
+      return j.receipt_api_url;
+    }
+  } catch (e) {
+    console.warn('Fetch config échoué:', e);
+  }
+
+  // 3) Fallback sur localStorage si on a déjà une valeur
   const stored = localStorage.getItem('RECEIPT_API_URL');
   if (stored) return stored;
 
-  try {
-    const res = await fetch(CONFIG_URL, { cache: 'no-store' });
-    if (res.ok) {
-      const j = await res.json();
-      if (j && j.receipt_api_url) {
-        localStorage.setItem('RECEIPT_API_URL', j.receipt_api_url);
-        return j.receipt_api_url;
-      }
-    }
-  } catch (_) {}
-
-  // défaut prod au cas où
-  return 'https://receipt-php-mindee.onrender.com/index.php';
+  // 4) Dernier recours : défaut prod + on mémorise
+  const fallback = 'https://receipt-php-mindee.onrender.com/index.php';
+  localStorage.setItem('RECEIPT_API_URL', fallback);
+  return fallback;
 }
 
 /* ========= UI ========= */
