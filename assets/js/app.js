@@ -63,34 +63,41 @@ async function bootGoogle(){
   await waitFor(()=>typeof gapi!=='undefined',150,10000).catch(()=>{});
   await waitFor(()=>window.google?.accounts?.oauth2,150,10000).catch(()=>{});
 
-  if(typeof gapi!=='undefined'){
-    await new Promise(r=>gapi.load('client',r));
-    const init={ discoveryDocs:[
-      'https://sheets.googleapis.com/$discovery/rest?version=v4',
-      'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest'
-    ]};
-    if(API_KEY&&!/VOTRE_API_KEY/i.test(API_KEY)) init.apiKey=API_KEY;
-    try{ await gapi.client.init(init); gapiReady=true; }
-    catch(e){ console.error('gapi.init failed:',e); setStatus('Échec init Google API'); return; }
+  // gapi client (Sheets + OAuth2 discovery)
+  if (typeof gapi !== 'undefined') {
+    await new Promise(r => gapi.load('client', r));
+    await gapi.client.init({
+      discoveryDocs: [
+        'https://sheets.googleapis.com/$discovery/rest?version=v4',
+        'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest'
+      ]
+    });
+    gapiReady = true; // ← important
   }
 
-  if(window.google?.accounts?.oauth2){
+  // Google Identity Services (OAuth token)
+  if (window.google?.accounts?.oauth2) {
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
       scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email',
       prompt: '',
-      callback: async(resp)=>{
-        if(resp.error){ showAuthNeeded(); return; }
+      callback: async (resp) => {
+        if (resp.error) { showAuthNeeded(); return; }
         accessToken = resp.access_token;
-        gapi.client.setToken({access_token:accessToken});
-        await updateAuthUI(); await listSheets();
+        gapi.client.setToken({ access_token: accessToken });
+        await updateAuthUI();
+        await listSheets();
       }
     });
-    gisReady=true;
+    gisReady = true; // ← important
   }
 
-  try{ await ensureConnected(false); }catch(_){}
-  await updateAuthUI(); await listSheets();
+  // Ne tente la connexion/liste que si les deux sont prêts
+  if (gapiReady && gisReady) {
+    try { await ensureConnected(false); } catch(_) {}
+    await updateAuthUI();
+    await listSheets();
+  }
 }
 function showAuthNeeded(){ const b=$('#btnAuth'); if(b) b.style.display='inline-block'; const s=$('#authStatus'); if(s) s.textContent='Autorisation nécessaire'; }
 async function ensureConnected(forceConsent=false){
