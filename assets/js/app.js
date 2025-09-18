@@ -1,70 +1,67 @@
-/* =======================
-   CONFIG
-======================= */
+/* ========= CONFIG ========= */
+// Change via console sans rebuild : localStorage.setItem('RECEIPT_API_URL', 'https://…render.com')
+const RECEIPT_API_URL = localStorage.getItem('RECEIPT_API_URL') || 'http://localhost:8080/index.php';
 const ALLOWED_EMAILS = ['polmickael3@gmail.com','sabrinamedjoub@gmail.com'].map(e=>e.toLowerCase());
 const CLIENT_ID      = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';
-const API_KEY        = 'VOTRE_API_KEY'; // optionnel
 const SPREADSHEET_ID = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI';
 const DEFAULT_SHEET  = 'Août 2025';
 
-// <<< Mets ici l’URL Render (backend PHP Mindee) >>>
-const RECEIPT_API_URL = "https://receipt-php-mindee.onrender.com";
+// Colonnes selon la personne
+const COLUMNS_BY_PERSON = {
+  'Sabrina': { label:'K', date:'L', total:'M' },
+  'Mickael': { label:'O', date:'P', total:'Q' }
+};
+// Fallback si pas de sélection
+const DEFAULT_COLUMNS = { label:'A', date:'B', total:'C' };
 
-/* ======================= */
+/* ========= STATE ========= */
 let accessToken=null, tokenClient=null, gapiReady=false, gisReady=false, currentUserEmail=null, sheetNameToId={};
 const $=s=>document.querySelector(s);
-const setStatus=msg=>{const el=$('#status'); if(el) el.textContent=msg; console.log('[Scan]',msg);};
-const enableSave=on=>{const b=$('#btnSave'); if(b) b.disabled=!on;};
+const setStatus=msg=>{ const el=$('#status'); if(el) el.textContent=msg; console.log('[Scan]',msg); };
+const enableSave=on=>{ const b=$('#btnSave'); if(b) b.disabled=!on; };
 
-document.addEventListener('DOMContentLoaded',()=>{ bindUI(); bootGoogle(); });
+document.addEventListener('DOMContentLoaded', ()=>{ bindUI(); bootGoogle(); });
 
 function bindUI(){
-  $('#file')?.addEventListener('change', handleImageChange);
+  $('#file')?.addEventListener('change', onImagePicked);
   $('#btnSave')?.addEventListener('click', saveToSheet);
-  $('#btnReset')?.addEventListener('click', resetForm);
-  $('#btnAuth')?.addEventListener('click', async ()=>{ 
-    try{ 
-      setStatus('Connexion…'); 
-      await ensureConnected(true); 
-      await updateAuthUI(); 
-      await listSheets(); 
-      setStatus('Connecté ✓'); 
-    }catch(e){ console.error(e); setStatus('Échec connexion'); }
+  $('#btnAuth')?.addEventListener('click', async ()=>{
+    try{ setStatus('Connexion…'); await ensureConnected(true); await updateAuthUI(); await listSheets(); setStatus('Connecté ✓'); }
+    catch(e){ console.error(e); setStatus('Échec connexion'); }
   });
 
-  const total=$('#total');
-  total?.addEventListener('blur',()=>{
-    const n=parseEuroToNumber(total.value);
-    if(n!=null) total.value=n.toFixed(2).replace('.',',');
+  $('#total')?.addEventListener('blur', ()=>{
+    const n = parseEuroToNumber($('#total').value);
+    if(n!=null) $('#total').value = n.toFixed(2).replace('.',',');
     validateCanSave();
   });
-  ['merchant','date'].forEach(id=>$('#'+id)?.addEventListener('input', validateCanSave));
+  ['merchant','date','total'].forEach(id=>$('#'+id)?.addEventListener('input', validateCanSave));
 }
 
 function resetForm(){
-  $('#preview')?.removeAttribute('src');
-  ['merchant','date','total'].forEach(id=>{const el=$('#'+id); if(el) el.value='';});
+  ['merchant','date','total'].forEach(id=>{ const el=$('#'+id); if(el) el.value=''; });
   enableSave(false); setStatus('Prêt.');
 }
-
 function parseEuroToNumber(s){
   if(!s) return null;
   const n=parseFloat(String(s).replace(/\s+/g,'').replace(/[€]/g,'').replace(',','.'));
   return Number.isFinite(n)?n:null;
 }
-
+function isoToDDMMYYYY(iso){
+  const m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m?`${m[3]}/${m[2]}/${m[1]}`:'';
+}
 function validateCanSave(){
   const label=($('#merchant')?.value||'').trim();
   const dateOk=!!$('#date')?.value;
   const totalOk=parseEuroToNumber($('#total')?.value)!=null;
   const sheetOk=!!$('#sheetSelect')?.value;
-  enableSave(!!label&&dateOk&&totalOk&&sheetOk);
+  enableSave(!!label && dateOk && totalOk && sheetOk && !!currentUserEmail);
 }
 
-/* ==== Google SDK ==== */
+/* ========= Google (GIS + gapi) ========= */
 async function bootGoogle(){
   await waitFor(()=>typeof gapi!=='undefined',150,10000).catch(()=>{});
-  await waitFor(()=>window.google&&google.accounts&&google.accounts.oauth2,150,10000).catch(()=>{});
+  await waitFor(()=>window.google?.accounts?.oauth2,150,10000).catch(()=>{});
 
   if(typeof gapi!=='undefined'){
     await new Promise(r=>gapi.load('client',r));
@@ -78,13 +75,13 @@ async function bootGoogle(){
   }
 
   if(window.google?.accounts?.oauth2){
-    tokenClient=google.accounts.oauth2.initTokenClient({
-      client_id:CLIENT_ID,
-      scope:'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email',
-      prompt:'',
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CLIENT_ID,
+      scope: 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/userinfo.email',
+      prompt: '',
       callback: async(resp)=>{
         if(resp.error){ showAuthNeeded(); return; }
-        accessToken=resp.access_token;
+        accessToken = resp.access_token;
         gapi.client.setToken({access_token:accessToken});
         await updateAuthUI(); await listSheets();
       }
@@ -92,16 +89,12 @@ async function bootGoogle(){
     gisReady=true;
   }
 
-  try{ await ensureConnected(false);}catch(_){}
+  try{ await ensureConnected(false); }catch(_){}
   await updateAuthUI(); await listSheets();
 }
-
-function showAuthNeeded(){ 
-  const b=$('#btnAuth'); if(b) b.style.display='inline-block'; 
-  const s=$('#authStatus'); if(s) s.textContent='Autorisation nécessaire'; 
-}
+function showAuthNeeded(){ const b=$('#btnAuth'); if(b) b.style.display='inline-block'; const s=$('#authStatus'); if(s) s.textContent='Autorisation nécessaire'; }
 async function ensureConnected(forceConsent=false){
-  if(!gapiReady||!gisReady) throw new Error('SDK Google non initialisés');
+  if(!gapiReady||!gisReady) throw new Error('SDK Google non init');
   if(accessToken) return;
   await new Promise((resolve,reject)=>{
     tokenClient.callback=(resp)=>{
@@ -109,7 +102,7 @@ async function ensureConnected(forceConsent=false){
       accessToken=resp.access_token; gapi.client.setToken({access_token:accessToken});
       resolve();
     };
-    tokenClient.requestAccessToken({prompt:forceConsent?'consent':''});
+    tokenClient.requestAccessToken({prompt: forceConsent ? 'consent' : ''});
   });
 }
 async function updateAuthUI(){
@@ -118,189 +111,127 @@ async function updateAuthUI(){
     const me=await gapi.client.oauth2.userinfo.get();
     currentUserEmail=(me.result?.email||'').toLowerCase();
     if(!currentUserEmail){ showAuthNeeded(); return; }
-    const ok=ALLOWED_EMAILS.includes(currentUserEmail);
     const el=$('#authStatus');
-    if(el) el.innerHTML= ok
-      ? `Connecté · <span class="text-success">${currentUserEmail}</span>`
-      : `Connecté · <span class="text-danger">accès refusé</span>`;
-    const b=$('#btnAuth'); if(b) b.style.display= ok?'none':'inline-block';
+    if(el) el.innerHTML = `Connecté · <span class="text-success">${currentUserEmail}</span>`;
+    const b=$('#btnAuth'); if(b) b.style.display='none';
+    validateCanSave();
   }catch(e){ console.warn(e); showAuthNeeded(); }
 }
 async function listSheets(){
   if(!accessToken) return;
   try{
     const resp=await gapi.client.sheets.spreadsheets.get({
-      spreadsheetId:SPREADSHEET_ID,
-      fields:'sheets(properties(sheetId,title,index))'
+      spreadsheetId: SPREADSHEET_ID,
+      fields: 'sheets(properties(sheetId,title,index))'
     });
-    const props=(resp.result.sheets||[]).map(s=>s.properties);
+    const props=(resp.result.sheets||[]).map(s=>s.properties).sort((a,b)=>a.index-b.index);
     sheetNameToId={};
-    const sel=$('#sheetSelect');
-    sel.innerHTML=props.sort((a,b)=>a.index-b.index).map(p=>{
-      sheetNameToId[p.title]=p.sheetId;
-      return `<option>${p.title}</option>`;
-    }).join('');
-    let pre=props.find(p=>p.title===DEFAULT_SHEET)||props.at(-1);
+    const sel=$('#sheetSelect'); if(!sel) return;
+    sel.innerHTML = props.map(p => { sheetNameToId[p.title]=p.sheetId; return `<option>${p.title}</option>`; }).join('');
+    const pre = props.find(p=>p.title===DEFAULT_SHEET) || props.at(-1);
     if(pre) sel.value=pre.title;
-  }catch(e){
-    console.warn('listSheets:',e);
-    setStatus('Impossible de lister les feuilles.');
-  }
+    validateCanSave();
+  }catch(e){ console.warn('listSheets:',e); setStatus('Impossible de lister les feuilles.'); }
 }
 function waitFor(test,every=100,timeout=10000){
   return new Promise((resolve,reject)=>{
-    const t0=Date.now();
-    (function loop(){
-      try{ if(test()) return resolve(); }catch(_){}
-      if(Date.now()-t0>timeout) return reject(new Error('waitFor timeout'));
-      setTimeout(loop,every);
-    })();
+    const t0=Date.now(); (function loop(){ try{ if(test()) return resolve(); }catch(_){}
+      if(Date.now()-t0>timeout) return reject(new Error('waitFor timeout')); setTimeout(loop,every); })();
   });
 }
 
-/* ==== Scan + API ==== */
-async function handleImageChange(e){
+/* ========= Image → backend ========= */
+async function onImagePicked(e){
   const file = e.target.files?.[0];
-  if (!file) return;
-  enableSave(false);
-  setStatus('Chargement de la photo…');
+  if(!file) return;
+  enableSave(false); setStatus('Analyse du ticket…');
 
-  try {
-    // --- Aperçu non étiré : on affiche directement le fichier
-    const url = URL.createObjectURL(file);
-    $('#preview').src = url;
-
-    // --- IMPORTANT : on envoie LA PHOTO ORIGINALE, pas un canvas recompressé
-    setStatus('Analyse du ticket…');
-    const imageBase64 = await fileToBase64NoPrefix(file); // original
-
-    // (Optionnel) Si tu veux garder jscanify pour plus tard :
-    // const corrected = await tryJscanifyToBase64(file); // à n’utiliser que si nécessaire
-
-    const parsed = await parseReceiptViaAPI(imageBase64);
-    applyParsedToForm(parsed);
-    setStatus('Reconnaissance OK. Vérifie puis “Enregistrer”.');
-    validateCanSave();
-  } catch (err) {
-    console.error(err);
-    setStatus('Analyse indisponible — corrige manuellement puis enregistre.');
-  }
+  try{
+    const b64 = await fileToBase64NoPrefix(file);
+    const parsed = await callBackend(b64); // {ok, supplier, dateISO, total}
+    if(parsed.supplier) $('#merchant').value = parsed.supplier;
+    if(parsed.dateISO)  $('#date').value     = parsed.dateISO;
+    if(parsed.total!=null) $('#total').value = Number(parsed.total).toFixed(2).replace('.',',');
+    setStatus('Reconnaissance OK. Vérifie puis « Enregistrer ».');
+  }catch(err){
+    console.error(err); setStatus('Analyse indisponible — complète manuellement.');
+  }finally{ validateCanSave(); }
 }
-// Convertit le fichier en base64 (SANS prefix data:)
 function fileToBase64NoPrefix(file){
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => {
-      const s = String(r.result || '');
-      // r.result = "data:image/jpeg;base64,AAA..."
-      const b64 = s.includes(',') ? s.split(',')[1] : s;
-      resolve(b64);
-    };
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-}
-function drawImageFit(img,max=1200){
-  const r=Math.min(max/img.naturalWidth,max/img.naturalHeight,1);
-  const w=Math.round(img.naturalWidth*r), h=Math.round(img.naturalHeight*r);
-  const c=document.createElement('canvas'); c.width=w; c.height=h;
-  c.getContext('2d').drawImage(img,0,0,w,h); return c;
-}
-function canvasToBase64Jpeg(canvas,q=0.75){ 
-  return canvas.toDataURL('image/jpeg',q).split(',')[1]; 
-}
-function fileToImage(file){
   return new Promise((resolve,reject)=>{
-    const img=new Image();
-    img.onload=()=>resolve(img);
-    img.onerror=reject;
-    img.src=URL.createObjectURL(file);
+    const r=new FileReader();
+    r.onload=()=>{ const s=String(r.result||''); resolve(s.includes(',')?s.split(',')[1]:s); };
+    r.onerror=reject; r.readAsDataURL(file);
   });
 }
-function canvasToBase64Jpeg(canvas,q=0.9){ return canvas.toDataURL('image/jpeg',q).split(',')[1]; }
-
-async function parseReceiptViaAPI(imageBase64){
+async function callBackend(imageBase64){
+  if(!accessToken) await ensureConnected(false);
   const resp = await fetch(RECEIPT_API_URL, {
     method: 'POST',
-    headers: {'Content-Type':'application/json'},
+    headers: {
+      'Content-Type': 'application/json',
+      // Send token Google pour vérification côté back
+      'Authorization': `Bearer ${accessToken}`
+    },
     body: JSON.stringify({ imageBase64 })
   });
-
-  const text = await resp.text();
-  let json = {};
-  try { json = JSON.parse(text); } catch { /* texte brut */ }
-
-  if (!resp.ok || json.error) {
-    console.error('Backend error:', { status: resp.status, body: text });
-    const msg = json.error ? (typeof json.error === 'string' ? json.error : JSON.stringify(json.error)) : `HTTP ${resp.status}`;
+  const text = await resp.text(); let json={}; try{ json=JSON.parse(text); }catch{}
+  if(!resp.ok || json.ok===false){
+    const msg = json.error ? (typeof json.error==='string'?json.error:JSON.stringify(json.error)) : `HTTP ${resp.status}`;
     throw new Error(msg);
   }
-  return json; // { supplier, dateISO, total }
-}
-function applyParsedToForm(p){
-  if(p.supplier) $('#merchant').value=p.supplier;
-  if(p.dateISO)  $('#date').value=p.dateISO; // input type="date" attend YYYY-MM-DD
-  if(p.total!=null) $('#total').value=Number(p.total).toFixed(2).replace('.',',');
-  validateCanSave();
+  return json;
 }
 
-/* ==== Save to Google Sheets ==== */
+/* ========= Écriture Sheets ========= */
 async function saveToSheet(){
   try{
     await ensureConnected(false);
-    const me=await gapi.client.oauth2.userinfo.get();
-    const email=(me.result?.email||'').toLowerCase();
-    if(!ALLOWED_EMAILS.includes(email)) throw new Error('Adresse non autorisée');
+    const sheetName = $('#sheetSelect')?.value || DEFAULT_SHEET;
 
-    const who=document.querySelector('input[name="who"]:checked')?.value||'';
-    const sheetName=$('#sheetSelect').value||DEFAULT_SHEET;
+    let cols = {...DEFAULT_COLUMNS};
+    const who = document.querySelector('input[name="who"]:checked')?.value;
+    if (who && COLUMNS_BY_PERSON[who]) cols = COLUMNS_BY_PERSON[who];
 
-    // Colonnes cibles selon la personne
-    const cols=(who.toLowerCase().startsWith('sab'))
-      ? {label:'K',date:'L',total:'M'}
-      : {label:'O',date:'P',total:'Q'};
-
-    const label=($('#merchant').value||'').trim();
-    const dateISO=$('#date').value;
-    const dateStr=isoToDDMMYYYY(dateISO);
-    const totalNum=parseEuroToNumber($('#total').value);
-
-    if(!label||!dateStr||totalNum==null) throw new Error('Champs incomplets');
+    const label = ($('#merchant').value||'').trim();
+    const dateISO = $('#date').value;
+    const dateStr = isoToDDMMYYYY(dateISO);
+    const totalNum = parseEuroToNumber($('#total').value);
+    if(!label || !dateStr || totalNum==null) throw new Error('Champs incomplets');
 
     setStatus('Recherche de la prochaine ligne libre…');
-    const row=await findNextEmptyRow(sheetName, cols.label, 11);
+    const row = await findNextEmptyRow(sheetName, cols.label, 2);
 
     setStatus('Écriture…');
     await gapi.client.sheets.spreadsheets.values.update({
-      spreadsheetId:SPREADSHEET_ID,
-      range:`${sheetName}!${cols.label}${row}:${cols.total}${row}`,
-      valueInputOption:'USER_ENTERED',
-      resource:{ values:[[label, dateStr, totalNum]] }
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${sheetName}!${cols.label}${row}:${cols.total}${row}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [[label, dateStr, totalNum]] }
     });
 
-    const sid=sheetNameToId[sheetName];
-    if(sid!=null){
+    const sid = sheetNameToId[sheetName];
+    if (sid!=null) {
       await gapi.client.sheets.spreadsheets.batchUpdate({
-        spreadsheetId:SPREADSHEET_ID,
-        resource:{ requests:[
-          { repeatCell:{ range:gridRangeFromA1(sid,`${cols.date}${row}:${cols.date}${row}`), cell:{ userEnteredFormat:{ numberFormat:{ type:'DATE', pattern:'dd/mm/yyyy' } } }, fields:'userEnteredFormat.numberFormat' } },
-          { repeatCell:{ range:gridRangeFromA1(sid,`${cols.total}${row}:${cols.total}${row}`), cell:{ userEnteredFormat:{ numberFormat:{ type:'NUMBER', pattern:'#,##0.00 "€"' } } }, fields:'userEnteredFormat.numberFormat' } }
+        spreadsheetId: SPREADSHEET_ID,
+        resource: { requests: [
+          { repeatCell:{ range:gridRangeFromA1(sid,`${cols.date}${row}:${cols.date}${row}`),
+            cell:{ userEnteredFormat:{ numberFormat:{ type:'DATE', pattern:'dd/mm/yyyy' } } },
+            fields:'userEnteredFormat.numberFormat' } },
+          { repeatCell:{ range:gridRangeFromA1(sid,`${cols.total}${row}:${cols.total}${row}`),
+            cell:{ userEnteredFormat:{ numberFormat:{ type:'NUMBER', pattern:'#,##0.00 "€"' } } },
+            fields:'userEnteredFormat.numberFormat' } }
         ] }
       });
     }
 
-    setStatus(`Enregistré ✔ (ligne ${row}, ${who}, onglet « ${sheetName} »)`);
+    setStatus(`Enregistré ✔ (ligne ${row}${who?`, ${who}`:''}, onglet « ${sheetName} »)`);
     enableSave(false);
   }catch(e){ console.error(e); setStatus('Erreur : '+(e.message||e)); }
 }
-function isoToDDMMYYYY(iso){
-  const m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/); 
-  if(!m) return '';
-  return `${m[3]}/${m[2]}/${m[1]}`;
-}
-async function findNextEmptyRow(sheetName,colLetter,startRow=11){
+async function findNextEmptyRow(sheet, col, startRow=2){
   const endRow=startRow+1000;
-  const range=`${sheetName}!${colLetter}${startRow}:${colLetter}${endRow}`;
+  const range=`${sheet}!${col}${startRow}:${col}${endRow}`;
   const resp=await gapi.client.sheets.spreadsheets.values.get({ spreadsheetId:SPREADSHEET_ID, range });
   const values=resp.result.values||[];
   for(let i=0;i<values.length;i++){
@@ -310,8 +241,7 @@ async function findNextEmptyRow(sheetName,colLetter,startRow=11){
   return startRow+values.length;
 }
 function gridRangeFromA1(sheetId,a1){
-  const m=a1.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i); 
-  if(!m) throw new Error('A1 invalide: '+a1);
+  const m=a1.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i); if(!m) throw new Error('A1 invalide: '+a1);
   const c1=colToIndex(m[1]), r1=+m[2]-1, c2=colToIndex(m[3])+1, r2=+m[4];
   return { sheetId, startRowIndex:r1, endRowIndex:r2, startColumnIndex:c1, endColumnIndex:c2 };
 }
