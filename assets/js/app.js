@@ -301,7 +301,8 @@ async function saveToSheet(){
     if(!label || !dateStr || totalNum==null) throw new Error('Champs incomplets');
 
     setStatus('Recherche de la prochaine ligne libre…');
-    const row = await findNextEmptyRow(sheetName, cols.label, 2);
+    // === LIGNE DE DÉPART FIXÉE À 11 POUR TOUT LE MONDE ===
+    const row = await findNextEmptyRow(sheetName, cols.label, 11);
 
     setStatus('Écriture…');
     await gapi.client.sheets.spreadsheets.values.update({
@@ -330,7 +331,7 @@ async function saveToSheet(){
     enableSave(false);
   }catch(e){ console.error(e); setStatus('Erreur : '+(e.message||e)); }
 }
-async function findNextEmptyRow(sheet, col, startRow=2){
+async function findNextEmptyRow(sheet, col, startRow=11){
   const endRow=startRow+1000;
   const range=`${sheet}!${col}${startRow}:${col}${endRow}`;
   const resp=await gapi.client.sheets.spreadsheets.values.get({ spreadsheetId:SPREADSHEET_ID, range });
