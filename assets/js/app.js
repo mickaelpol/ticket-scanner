@@ -1,6 +1,18 @@
 /* ========= CONFIG ========= */
-// Change via console sans rebuild : localStorage.setItem('RECEIPT_API_URL', 'https://…render.com')
-const RECEIPT_API_URL = localStorage.getItem('RECEIPT_API_URL') || 'http://localhost:8080/index.php';
+
+// 0) Override rapide via ?api=... (pratique pour mobile/tests)
+const apiParam = new URLSearchParams(location.search).get('api');
+if (apiParam) localStorage.setItem('RECEIPT_API_URL', apiParam);
+
+// 1) Endpoint de config sur le back (renvoie {receipt_api_url})
+//    -> à adapter si besoin : https://<ton-app>.onrender.com/config.php
+const CONFIG_URL = 'https://receipt-php-mindee.onrender.com/config.php';
+
+// 2) URL de l’API reçusée à l’exécution (résolue au boot)
+let RECEIPT_API_URL = null;
+let apiReady = false;
+
+// 3) Divers (Google / Sheets)
 const ALLOWED_EMAILS = ['polmickael3@gmail.com','sabrinamedjoub@gmail.com'].map(e=>e.toLowerCase());
 const CLIENT_ID      = '479308590121-qggjv8oum95edeql478aqtit3lcffgv7.apps.googleusercontent.com';
 const SPREADSHEET_ID = '1OgcxX9FQ4VWmWNKWxTqqmA1v-lmqMWB7LmRZHMq7jZI';
@@ -20,8 +32,44 @@ const $=s=>document.querySelector(s);
 const setStatus=msg=>{ const el=$('#status'); if(el) el.textContent=msg; console.log('[Scan]',msg); };
 const enableSave=on=>{ const b=$('#btnSave'); if(b) b.disabled=!on; };
 
-document.addEventListener('DOMContentLoaded', ()=>{ bindUI(); bootGoogle(); });
+/* ========= BOOT ========= */
+document.addEventListener('DOMContentLoaded', initApp);
 
+async function initApp(){
+  // Résout l’URL du back AVANT d’attacher les handlers
+  RECEIPT_API_URL = await resolveApiUrl();
+  apiReady = true;
+  setStatus('API: ' + RECEIPT_API_URL);
+
+  bindUI();
+  bootGoogle();
+}
+
+/** Ordre de résolution :
+ *   1) localStorage.RECEIPT_API_URL (peut être set par ?api=...)
+ *   2) GET CONFIG_URL -> { receipt_api_url }
+ *   3) défaut prod
+ */
+async function resolveApiUrl(){
+  const stored = localStorage.getItem('RECEIPT_API_URL');
+  if (stored) return stored;
+
+  try {
+    const res = await fetch(CONFIG_URL, { cache: 'no-store' });
+    if (res.ok) {
+      const j = await res.json();
+      if (j && j.receipt_api_url) {
+        localStorage.setItem('RECEIPT_API_URL', j.receipt_api_url);
+        return j.receipt_api_url;
+      }
+    }
+  } catch (_) {}
+
+  // défaut prod au cas où
+  return 'https://receipt-php-mindee.onrender.com/index.php';
+}
+
+/* ========= UI ========= */
 function bindUI(){
   $('#file')?.addEventListener('change', onImagePicked);
   $('#btnSave')?.addEventListener('click', saveToSheet);
@@ -72,7 +120,7 @@ async function bootGoogle(){
         'https://www.googleapis.com/discovery/v1/apis/oauth2/v2/rest'
       ]
     });
-    gapiReady = true; // ← important
+    gapiReady = true;
   }
 
   // Google Identity Services (OAuth token)
@@ -89,10 +137,9 @@ async function bootGoogle(){
         await listSheets();
       }
     });
-    gisReady = true; // ← important
+    gisReady = true;
   }
 
-  // Ne tente la connexion/liste que si les deux sont prêts
   if (gapiReady && gisReady) {
     try { await ensureConnected(false); } catch(_) {}
     await updateAuthUI();
@@ -154,6 +201,13 @@ async function onImagePicked(e){
   enableSave(false); setStatus('Analyse du ticket…');
 
   try{
+    // S’assure que l’URL API est prête (au cas où on arrive ici très tôt)
+    if (!apiReady || !RECEIPT_API_URL) {
+      RECEIPT_API_URL = await resolveApiUrl();
+      apiReady = true;
+      setStatus('API: ' + RECEIPT_API_URL);
+    }
+
     const b64 = await fileToBase64NoPrefix(file);
     const parsed = await callBackend(b64); // {ok, supplier, dateISO, total}
     if(parsed.supplier) $('#merchant').value = parsed.supplier;
@@ -173,11 +227,13 @@ function fileToBase64NoPrefix(file){
 }
 async function callBackend(imageBase64){
   if(!accessToken) await ensureConnected(false);
+  if(!RECEIPT_API_URL) throw new Error('RECEIPT_API_URL manquante');
+
   const resp = await fetch(RECEIPT_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      // Send token Google pour vérification côté back
+      // Token Google pour vérification côté back
       'Authorization': `Bearer ${accessToken}`
     },
     body: JSON.stringify({ imageBase64 })
