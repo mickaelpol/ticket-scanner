@@ -10,7 +10,7 @@ if (apiOverride) {
 
 // 1) Endpoint de config sur le back (renvoie { ok:true, receipt_api_url: "..." })
 //    -> adapte si tu utilises un fichier config séparé : '.../config.php'
-const CONFIG_URL = 'https://receipt-php-mindee.onrender.com/index.php/config.php';
+const CONFIG_URL = 'https://receipt-php-mindee.onrender.com/config.php';
 
 // 2) URL de l’API résolue dynamiquement au boot (via resolveApiUrl)
 let RECEIPT_API_URL = null;
